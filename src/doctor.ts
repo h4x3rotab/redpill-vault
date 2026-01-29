@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, CONFIG_FILENAME } from "./config.js";
+import { getMasterKeyPath, isApproved } from "./approval.js";
 
 export interface Check {
   name: string;
@@ -22,7 +23,21 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     checks.push({ name: "psst installed", ok: false, message: "psst not found — install from https://github.com/Michaelliv/psst" });
   }
 
-  // 2. psst vault exists
+  // 2. master key exists
+  if (existsSync(getMasterKeyPath())) {
+    checks.push({ name: "master key", ok: true, message: "master key found" });
+  } else {
+    checks.push({ name: "master key", ok: false, message: "master key not found — run: rv init" });
+  }
+
+  // 3. project approved
+  if (isApproved(cwd)) {
+    checks.push({ name: "project approved", ok: true, message: "project is approved" });
+  } else {
+    checks.push({ name: "project approved", ok: false, message: "project not approved — run: rv approve" });
+  }
+
+  // 4. psst vault exists
   if (psstInstalled) {
     try {
       execSync("psst list", { stdio: "pipe" });

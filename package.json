@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "rv": "./dist/cli.js",
-    "rv-hook": "./dist/hook.js"
+    "rv-hook": "./dist/hook.js",
+    "rv-exec": "./dist/rv-exec.js"
   },
   "scripts": {
     "build": "tsc",

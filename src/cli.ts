@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
 import { CONFIG_FILENAME, loadConfig } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
+import { getRvConfigDir, getMasterKeyPath, approveProject, revokeProject, isApproved } from "./approval.js";
 
 const program = new Command();
 
@@ -177,6 +179,73 @@ program
       console.log("\nSome checks failed.");
       process.exit(1);
     }
+  });
+
+program
+  .command("init")
+  .description("Generate master key and initialize psst vault")
+  .action(() => {
+    const configDir = getRvConfigDir();
+    const masterKeyPath = getMasterKeyPath();
+    mkdirSync(configDir, { recursive: true });
+
+    if (existsSync(masterKeyPath)) {
+      console.log("Master key already exists at " + masterKeyPath);
+    } else {
+      const key = randomBytes(32).toString("hex");
+      writeFileSync(masterKeyPath, key + "\n", { mode: 0o600 });
+      chmodSync(masterKeyPath, 0o600);
+      console.log("Created master key at " + masterKeyPath);
+    }
+
+    // Init psst vault with the master key
+    const masterKey = readFileSync(masterKeyPath, "utf-8").trim();
+    try {
+      const out = execSync("psst init --global", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, PSST_PASSWORD: masterKey },
+      });
+      console.log("psst vault initialized");
+    } catch (err: unknown) {
+      const stderr = (err as { stderr?: string }).stderr ?? "";
+      const stdout = (err as { stdout?: string }).stdout ?? "";
+      if (stderr.includes("already exists") || stdout.includes("already exists")) {
+        console.log("psst vault already initialized");
+      } else {
+        console.error("Failed to initialize psst vault. Is psst installed?");
+        process.exit(1);
+      }
+    }
+  });
+
+program
+  .command("approve")
+  .description("Approve the current project for secret injection")
+  .action(() => {
+    const cwd = process.cwd();
+    approveProject(cwd);
+    console.log(`Approved: ${cwd}`);
+
+    const config = loadConfig(cwd);
+    if (config && Object.keys(config.secrets).length > 0) {
+      console.log("Secrets that will be injected:");
+      for (const [key, entry] of Object.entries(config.secrets)) {
+        let line = `  ${key}`;
+        if (entry.as) line += ` → ${entry.as}`;
+        if (entry.description) line += ` — ${entry.description}`;
+        console.log(line);
+      }
+    }
+  });
+
+program
+  .command("revoke")
+  .description("Revoke approval for the current project")
+  .action(() => {
+    const cwd = process.cwd();
+    revokeProject(cwd);
+    console.log(`Revoked: ${cwd}`);
   });
 
 program.parse();

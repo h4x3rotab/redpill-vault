@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { loadConfig, buildPsstArgs } from "./config.js";
+import { isApproved } from "./approval.js";
 
 interface HookInput {
   tool_name: string;
@@ -26,10 +27,16 @@ const BLOCKED_PATTERNS = [
   /\bsqlite3?\b.*vault\.db/,
 ];
 
-const SKIP_PREFIXES = ["psst ", "rv "];
+const AGENT_BLOCKED_PATTERNS = [
+  /^rv\s+approve\b/,
+  /^rv\s+revoke\b/,
+  /^rv\s+init\b/,
+];
+
+const SKIP_PREFIXES = ["rv-exec "];
 const SAFE_PSST = [/^psst\s+list\b/, /^psst\s+set\b/, /^psst\s+rm\b/, /^psst\s+init\b/, /^psst\s+scan\b/, /^psst\s+install-hook\b/, /^psst\s+import\b/];
 
-function processCommand(command: string, cwd?: string): HookResult {
+export function processCommand(command: string, cwd?: string): HookResult {
   const trimmed = command.trim();
 
   // Block dangerous commands
@@ -42,28 +49,49 @@ function processCommand(command: string, cwd?: string): HookResult {
     }
   }
 
-  // Skip: already wrapped or rv command
-  for (const prefix of SKIP_PREFIXES) {
-    if (trimmed.startsWith(prefix)) {
-      // Allow safe psst subcommands
-      for (const safe of SAFE_PSST) {
-        if (safe.test(trimmed)) return {};
-      }
-      // If it's a psst command that's not explicitly safe and not blocked, pass through
-      if (trimmed.startsWith("psst ")) return {};
-      // rv commands pass through
-      return {};
+  // Block agent from running approval/init commands
+  for (const pat of AGENT_BLOCKED_PATTERNS) {
+    if (pat.test(trimmed)) {
+      return {
+        decision: "block",
+        reason: "redpill-vault: blocked — only the user may run this command",
+      };
     }
   }
 
-  // Try to load config and wrap
+  // Skip: already wrapped with rv-exec
+  for (const prefix of SKIP_PREFIXES) {
+    if (trimmed.startsWith(prefix)) return {};
+  }
+
+  // Allow safe psst subcommands, block others
+  if (trimmed.startsWith("psst ")) {
+    for (const safe of SAFE_PSST) {
+      if (safe.test(trimmed)) return {};
+    }
+    return {};
+  }
+
+  // rv commands (list, add, etc.) pass through
+  if (trimmed.startsWith("rv ")) return {};
+
+  // Check project approval
+  const effectiveCwd = cwd ?? process.cwd();
+  if (!isApproved(effectiveCwd)) {
+    return {
+      decision: "block",
+      reason: "redpill-vault: project not approved — the user must run: rv approve",
+    };
+  }
+
+  // Try to load config and wrap with rv-exec
   const config = loadConfig(cwd);
   if (!config || Object.keys(config.secrets).length === 0) {
     return {}; // no config or no secrets → passthrough
   }
 
   const psstArgs = buildPsstArgs(config);
-  const wrapped = `psst ${psstArgs.join(" ")} -- ${command}`;
+  const wrapped = `rv-exec ${psstArgs.join(" ")} -- ${command}`;
   return { updatedInput: { command: wrapped } };
 }
 
