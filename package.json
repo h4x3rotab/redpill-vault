@@ -31,14 +31,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@pssst/cli": "^0.3.0",
     "commander": "^13.0.0"
-  },
-  "peerDependencies": {
-    "psst": "*"
-  },
-  "peerDependenciesMeta": {
-    "psst": {
-      "optional": true
-    }
   }
 }
