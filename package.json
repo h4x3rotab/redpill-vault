@@ -1,0 +1,43 @@
+{
+  "name": "redpill-vault",
+  "version": "0.1.0",
+  "description": "Secure credential manager for AI tools — transparent secret injection via psst",
+  "type": "module",
+  "bin": {
+    "rv": "./dist/cli.js",
+    "rv-hook": "./dist/hook.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "secrets",
+    "vault",
+    "ai",
+    "claude",
+    "hook"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "commander": "^13.0.0"
+  },
+  "peerDependencies": {
+    "psst": "*"
+  },
+  "peerDependenciesMeta": {
+    "psst": {
+      "optional": true
+    }
+  }
+}
