@@ -101,6 +101,7 @@ async function main() {
     const output = {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
+        permissionDecision: "allow",
         updatedInput: { command: result.updatedInput.command },
       },
     };
