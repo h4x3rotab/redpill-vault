@@ -3,3 +3,5 @@ dist/
 *.tgz
 .psst/
 bin/
+.rv.json
+.claude/settings.json
