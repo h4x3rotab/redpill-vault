@@ -1,0 +1,20 @@
+{
+  "name": "redpill-vault-marketplace",
+  "owner": {
+    "name": "redpill-vault"
+  },
+  "plugins": [
+    {
+      "name": "redpill-vault",
+      "source": "./",
+      "description": "Secure credential manager for AI tools — transparent secret injection via psst",
+      "strict": false,
+      "keywords": ["secrets", "vault", "credentials", "hook"],
+      "skills": ["./skills/redpill-vault"]
+    }
+  ],
+  "metadata": {
+    "description": "Marketplace for the redpill-vault plugin",
+    "version": "0.1.0"
+  }
+}

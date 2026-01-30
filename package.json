@@ -15,7 +15,11 @@
     "test:watch": "vitest"
   },
   "files": [
-    "dist"
+    "dist",
+    ".claude-plugin",
+    "skills",
+    "hooks",
+    "setup.sh"
   ],
   "keywords": [
     "secrets",
