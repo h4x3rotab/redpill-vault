@@ -9,15 +9,19 @@ Secure credential manager for AI tools. Secrets are injected transparently into 
 
 ## Setup (IMPORTANT — follow these steps in order)
 
-**Step 1.** Run `rv init` — this is allowed through the hook even before approval:
+**Step 1.** Install redpill-vault (one-time):
+
+```bash
+bash ./skills/redpill-vault/setup.sh
+```
+
+**Step 2.** Run `rv init` — this is allowed through the hook even before approval:
 
 ```bash
 rv init
 ```
 
-**Step 2.** Tell the user to run `rv approve` in their terminal. Only the user can approve — the hook blocks the agent from running this command.
-
-If `rv init` fails with "command not found", the plugin hook will auto-install redpill-vault on the next bash command. Just retry `rv init` after that.
+**Step 3.** Tell the user to run `rv approve` in their terminal. Only the user can approve — the hook blocks the agent from running this command.
 
 ## Adding secrets
 

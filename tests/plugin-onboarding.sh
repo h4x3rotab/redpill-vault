@@ -151,7 +151,7 @@ test -f "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
   && pass "SKILL.md exists" || fail "SKILL.md missing"
 grep -q "^---" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
   && pass "SKILL.md has YAML frontmatter" || fail "SKILL.md missing frontmatter"
-grep -q "npm i -g" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
+grep -q "setup.sh" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
   && pass "SKILL.md has install instructions" || fail "SKILL.md missing install instructions"
 grep -q "user only" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
   && pass "SKILL.md marks approve as user-only" || fail "SKILL.md missing user-only marker"

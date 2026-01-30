@@ -39,9 +39,9 @@ python3 -m json.tool "$PROJECT_DIR/.claude-plugin/marketplace.json" >/dev/null 2
   && pass "marketplace.json valid" || fail "marketplace.json invalid"
 python3 -m json.tool "$PROJECT_DIR/hooks/hooks.json" >/dev/null 2>&1 \
   && pass "hooks.json valid" || fail "hooks.json invalid"
-bash -n "$PROJECT_DIR/setup.sh" \
+bash -n "$PROJECT_DIR/skills/redpill-vault/setup.sh" \
   && pass "setup.sh syntax" || fail "setup.sh syntax"
-test -x "$PROJECT_DIR/setup.sh" \
+test -x "$PROJECT_DIR/skills/redpill-vault/setup.sh" \
   && pass "setup.sh executable" || fail "setup.sh not executable"
 test -f "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
   && pass "SKILL.md exists" || fail "SKILL.md missing"

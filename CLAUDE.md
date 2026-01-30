@@ -24,11 +24,11 @@ tests/
 .claude-plugin/
   marketplace.json    — Claude Code marketplace manifest
 hooks/
-  hooks.json          — PreToolUse hook (points to setup.sh)
+  hooks.json          — PreToolUse hook (runs rv-hook directly)
 skills/
   redpill-vault/
     SKILL.md          — skill instructions for Claude
-setup.sh              — bootstrap: installs rv if needed, then delegates to rv-hook
+    setup.sh          — bootstrap: installs rv if needed, then delegates to rv-hook
 ```
 
 ## Development

@@ -18,8 +18,7 @@
     "dist",
     ".claude-plugin",
     "skills",
-    "hooks",
-    "setup.sh"
+    "hooks"
   ],
   "keywords": [
     "secrets",
