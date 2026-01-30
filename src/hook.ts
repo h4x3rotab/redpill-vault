@@ -172,9 +172,14 @@ async function main() {
     return;
   }
 
+
+  const toolInput = parsed.tool_input as Record<string, unknown>;
   const inferredCwd =
     parsed.cwd ??
-    (parsed.tool_input as { cwd?: string }).cwd ??
+    (toolInput.cwd as string | undefined) ??
+    (toolInput.working_directory as string | undefined) ??
+    (toolInput.workingDirectory as string | undefined) ??
+    (toolInput.workdir as string | undefined) ??
     process.env.CLAUDE_PROJECT_DIR ??
     process.env.PWD;
   const result = processCommand(parsed.tool_input.command, inferredCwd);

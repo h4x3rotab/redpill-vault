@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { CONFIG_FILENAME, loadConfig } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
 import { runPsst } from "./psst.js";
@@ -14,7 +15,7 @@ const program = new Command();
 program
   .name("rv")
   .description("redpill-vault — secure credential manager for AI tools")
-  .version("0.1.6");
+  .version("0.1.7");
 
 function runInit() {
   // 1. Create master key
@@ -66,9 +67,10 @@ function runInit() {
   mkdirSync(claudeDir, { recursive: true });
   const settingsPath = join(claudeDir, "settings.json");
 
+  const hookPath = join(dirname(fileURLToPath(import.meta.url)), "hook.js");
   const hookDef = {
     type: "command" as const,
-    command: "rv-hook",
+    command: `node ${hookPath}`,
   };
 
   let settings: Record<string, unknown> = {};
@@ -93,19 +95,8 @@ function runInit() {
     });
   });
   if (!alreadyInstalled) {
-    // Check if the plugin is installed (hooks/hooks.json handles it)
-    let pluginInstalled = false;
-    try {
-      const out = execSync("claude plugin list 2>/dev/null", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-      pluginInstalled = out.includes("redpill-vault");
-    } catch { /* claude not available or plugin not installed */ }
-
-    if (pluginInstalled) {
-      console.log("rv-hook provided by plugin (skipping settings.json wiring)");
-    } else {
-      preToolUse.push({ matcher: "Bash", hooks: [hookDef] });
-      console.log("Added rv-hook to .claude/settings.json");
-    }
+    preToolUse.push({ matcher: "Bash", hooks: [hookDef] });
+    console.log("Added rv-hook to .claude/settings.json");
   } else {
     console.log("rv-hook already configured");
   }
