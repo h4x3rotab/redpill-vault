@@ -28,7 +28,7 @@ hooks/
 skills/
   redpill-vault/
     SKILL.md          — skill instructions for Claude
-    setup.sh          — bootstrap: installs rv if needed, then delegates to rv-hook
+    setup.sh          — one-time installer (npm i -g from plugin root)
 ```
 
 ## Development
@@ -50,3 +50,12 @@ skills/
 - **Don't fake HOME in integration tests** — it breaks claude auth, git config, etc. Use targeted env vars (`RV_CONFIG_DIR`) instead. Restore real HOME for any claude invocations.
 - **Unknown psst subcommands are blocked by default.** Only explicitly safe commands (list, set, rm, init, scan, install-hook, import) pass through the hook.
 - **Plugin hook deduplication.** `rv init` skips wiring into `.claude/settings.json` if the plugin is installed (detected via `claude plugin list`). The plugin's `hooks/hooks.json` handles it instead.
+
+## Claude Code plugin conventions
+
+- **Hooks should be minimal.** `hooks/hooks.json` calls the binary directly (`rv-hook`). If it's not installed, the command fails silently. Installation belongs in the skill, not the hook.
+- **`setup.sh` lives in the skill directory** (`skills/redpill-vault/setup.sh`). SKILL.md references it as `./skills/redpill-vault/setup.sh` — this path resolves relative to the plugin cache root.
+- **Use `SCRIPT_DIR` to self-locate in shell scripts**, not `CLAUDE_PLUGIN_ROOT`. Pattern: `SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"`. Then navigate to the package root with `"$SCRIPT_DIR/../.."`.
+- **Never tell Claude to run `npm i -g <package-name>`.** It doesn't work. Instead, `setup.sh` installs from the plugin's own directory (`npm i -g "$PROJECT_DIR"`).
+- **Skills must be explicitly invoked.** SKILL.md instructions are only visible after Claude invokes the skill via the Skill tool. Tests must use `--allowedTools "Bash,Skill"` and prompt with "Use the redpill-vault skill to...".
+- **Plugin cache uses git commit hashes.** Uncommitted changes won't appear in the cached plugin. Always commit before testing plugin behavior.
