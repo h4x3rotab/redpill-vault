@@ -7,21 +7,19 @@ description: Secure credential manager for AI tools. Secrets are injected transp
 
 Secure credential manager for AI tools. Secrets are injected transparently into shell commands — the agent never sees secret values or the master key.
 
-## Setup (IMPORTANT — follow these steps in order)
+## Setup
 
-**Step 1.** Install redpill-vault (one-time):
+Run these commands in order. Step 1 installs the CLI — always run it first, even if `rv` appears missing.
 
 ```bash
-bash ./skills/redpill-vault/setup.sh
+./skills/redpill-vault/setup.sh
 ```
-
-**Step 2.** Run `rv init` — this is allowed through the hook even before approval:
 
 ```bash
 rv init
 ```
 
-**Step 3.** Tell the user to run `rv approve` in their terminal. Only the user can approve — the hook blocks the agent from running this command.
+Then tell the user to run `rv approve` in their terminal. Only the user can approve — the hook blocks the agent from running this command.
 
 ## Adding secrets
 
