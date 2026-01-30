@@ -81,19 +81,27 @@ export function processCommand(command: string, cwd?: string): HookResult {
   // rv commands (list, add, etc.) pass through
   if (trimmed.startsWith("rv ")) return {};
 
-  // Check project approval
+  // Try to load config and wrap with rv-exec
+  let config: ReturnType<typeof loadConfig>;
+  try {
+    config = loadConfig(cwd);
+  } catch {
+    return {
+      decision: "block",
+      reason: "redpill-vault: invalid .rv.json — the user must run: rv init",
+    };
+  }
+  if (!config || Object.keys(config.secrets).length === 0) {
+    return {}; // no config or no secrets → passthrough
+  }
+
+  // Check project approval (only if a config exists)
   const effectiveCwd = cwd ?? process.cwd();
   if (!isApproved(effectiveCwd)) {
     return {
       decision: "block",
       reason: "redpill-vault: project not approved — the user must run: rv approve",
     };
-  }
-
-  // Try to load config and wrap with rv-exec
-  const config = loadConfig(cwd);
-  if (!config || Object.keys(config.secrets).length === 0) {
-    return {}; // no config or no secrets → passthrough
   }
 
   const psstArgs = buildPsstArgs(config);

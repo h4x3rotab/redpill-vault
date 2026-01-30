@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, CONFIG_FILENAME } from "./config.js";
@@ -8,6 +8,14 @@ export interface Check {
   name: string;
   ok: boolean;
   message: string;
+}
+
+function psstList(): { ok: boolean; output: string } {
+  const result = spawnSync("psst", ["--global", "list"], { encoding: "utf-8" });
+  if (result.status === 0) {
+    return { ok: true, output: result.stdout ?? "" };
+  }
+  return { ok: false, output: "" };
 }
 
 export function runChecks(cwd: string = process.cwd()): Check[] {
@@ -39,10 +47,10 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
 
   // 4. psst vault exists
   if (psstInstalled) {
-    try {
-      execSync("psst --global list", { stdio: "pipe" });
+    const list = psstList();
+    if (list.ok) {
       checks.push({ name: "psst vault", ok: true, message: "vault accessible" });
-    } catch {
+    } else {
       checks.push({ name: "psst vault", ok: false, message: "vault not accessible — run: rv init" });
     }
   }
@@ -68,10 +76,10 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     const config = loadConfig(cwd);
     if (config) {
       let vaultKeys: string[] = [];
-      try {
-        const out = execSync("psst --global list", { encoding: "utf-8" });
-        vaultKeys = out.trim().split("\n").filter(Boolean);
-      } catch { /* empty */ }
+      const list = psstList();
+      if (list.ok) {
+        vaultKeys = list.output.trim().split("\n").filter(Boolean);
+      }
       for (const key of Object.keys(config.secrets)) {
         const found = vaultKeys.some(line => line.trim() === key || line.trim().startsWith(key + " "));
         checks.push({
@@ -90,13 +98,11 @@ export function checkKeys(cwd: string = process.cwd()): Check[] {
   const config = loadConfig(cwd);
   if (!config) return [{ name: CONFIG_FILENAME, ok: false, message: "no config found" }];
 
-  let vaultKeys: string[] = [];
-  try {
-    const out = execSync("psst --global list", { encoding: "utf-8" });
-    vaultKeys = out.trim().split("\n").filter(Boolean);
-  } catch {
+  const list = psstList();
+  if (!list.ok) {
     return [{ name: "psst", ok: false, message: "cannot list vault keys" }];
   }
+  const vaultKeys = list.output.trim().split("\n").filter(Boolean);
 
   const checks: Check[] = [];
   for (const key of Object.keys(config.secrets)) {

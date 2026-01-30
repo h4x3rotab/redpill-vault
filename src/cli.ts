@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { CONFIG_FILENAME, loadConfig } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
 import { getRvConfigDir, getMasterKeyPath, approveProject, revokeProject, isApproved } from "./approval.js";
@@ -32,20 +32,24 @@ function runInit() {
 
   // 2. Init psst vault
   const masterKey = readFileSync(masterKeyPath, "utf-8").trim();
-  try {
-    execSync("psst init --global", {
+  {
+    const result = spawnSync("psst", ["init", "--global"], {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, PSST_PASSWORD: masterKey },
     });
-    console.log("psst vault initialized");
-  } catch (err: unknown) {
-    const stderr = (err as { stderr?: string }).stderr ?? "";
-    const stdout = (err as { stdout?: string }).stdout ?? "";
-    if (stderr.includes("already exists") || stdout.includes("already exists")) {
+    const stdout = result.stdout ?? "";
+    const stderr = result.stderr ?? "";
+    if (result.status === 0) {
+      console.log("psst vault initialized");
+    } else if (stderr.includes("already exists") || stdout.includes("already exists")) {
       console.log("psst vault already initialized");
     } else {
-      console.error("Failed to initialize psst vault. Is psst installed?");
+      if (result.error) {
+        console.error("Failed to initialize psst vault. Is psst installed?");
+      } else {
+        console.error("Failed to initialize psst vault. Is psst installed?");
+      }
       process.exit(1);
     }
   }
