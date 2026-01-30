@@ -9,11 +9,13 @@ Secure credential manager for AI tools. Secrets are injected transparently into 
 
 ## Setup
 
-Run these commands to install and initialize:
+Run the install script (installs globally — required for the PreToolUse hook):
 
 ```bash
-npm i -g redpill-vault
+bash ${CLAUDE_PLUGIN_ROOT}/setup.sh
 ```
+
+Then initialize in the project directory:
 
 ```bash
 rv init

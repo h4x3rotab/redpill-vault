@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# Gate script for redpill-vault Claude Code plugin.
-# If rv-hook is installed, delegates to it. Otherwise exits cleanly
-# and lets the skill guide Claude through installation.
+set -euo pipefail
+
+# Install redpill-vault globally from npm.
+# Called by the skill (SKILL.md) during first-time setup.
+# The PreToolUse hook requires rv-hook on PATH, so global install is mandatory.
 
 if command -v rv-hook &>/dev/null; then
-  exec rv-hook
+  echo "redpill-vault is already installed ($(rv --version))"
+  exit 0
 fi
 
-# rv-hook not installed — pass through silently.
-# The skill (SKILL.md) will guide Claude to run: npm i -g redpill-vault
-exit 0
+echo "Installing redpill-vault from npm..."
+npm i -g redpill-vault
+
+echo "Installed: $(rv --version)"
+echo "Binaries: rv, rv-hook, rv-exec"
