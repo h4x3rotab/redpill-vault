@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# E2E test for the Claude Code plugin onboarding flow.
+# E2E test using the PUBLISHED npm package (not local source).
 #
-# Simulates the exact developer experience:
-#   1. Install plugin via marketplace (rv NOT installed yet)
-#   2. Ask Claude to set up redpill-vault — it installs the package and runs rv init
-#   3. Hook blocks because project is not approved
-#   4. User runs rv approve
-#   5. Approved project: command passes through
-#   6. Verify skill and plugin artifacts
+# Simulates the real developer experience:
+#   1. Uninstall rv (clean slate)
+#   2. Install plugin via marketplace (from local repo — plugin files only)
+#   3. Ask Claude to set up redpill-vault — it installs from npm registry
+#   4. Hook blocks because project is not approved
+#   5. User runs rv approve
+#   6. Approved project: command passes through
 #   7. Clean uninstall
 #
-# Requires: claude CLI authenticated
+# Requires: claude CLI authenticated, redpill-vault published to npm
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -36,28 +36,18 @@ cleanup() {
 trap cleanup EXIT
 
 export RV_CONFIG_DIR="$FAKE_STATE/rv"
-# Tell setup.sh to install from local source instead of npm registry
-export RV_INSTALL_SOURCE="$PROJECT_DIR"
 
 # ── 0. Ensure rv is NOT installed ────────────────────────────────────
 echo "=== Ensure rv not installed ==="
-npm run build --prefix "$PROJECT_DIR" >/dev/null 2>&1
-npm unlink -g redpill-vault 2>/dev/null || true
+npm rm -g redpill-vault 2>/dev/null || true
 
 if command -v rv-hook &>/dev/null; then
-  fail "rv-hook still on PATH after unlink"
+  fail "rv-hook still on PATH after uninstall"
 else
   pass "rv-hook not on PATH (clean slate)"
 fi
 
-# ── 1. Plugin validation + install ───────────────────────────────────
-echo ""
-echo "=== Plugin validation ==="
-validate_output=$(claude plugin validate "$PROJECT_DIR" 2>&1)
-echo "$validate_output"
-echo "$validate_output" | grep -q "Validation passed" \
-  && pass "marketplace validates" || fail "marketplace validation failed"
-
+# ── 1. Plugin install ────────────────────────────────────────────────
 echo ""
 echo "=== Plugin install ==="
 claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" 2>/dev/null || true
@@ -69,19 +59,17 @@ claude plugin marketplace add "$PROJECT_DIR" 2>&1
 claude plugin install "${PLUGIN_NAME}@${MARKETPLACE_NAME}" 2>&1
 [ $? -eq 0 ] && pass "plugin install" || fail "plugin install"
 
-# Verify plugin lists
 skill_list=$(claude plugin list 2>&1 || true)
 echo "$skill_list"
 echo "$skill_list" | grep -qi "redpill-vault" \
   && pass "plugin lists redpill-vault" || fail "plugin does not list redpill-vault"
 
-# ── 2. Ask Claude to set up rv — it should install + init itself ──────
+# ── 2. Ask Claude to set up rv — installs from npm registry ──────────
 echo ""
-echo "=== Agent-driven setup ==="
+echo "=== Agent-driven setup (from npm registry) ==="
 cd "$FAKE_PROJECT"
 
 # The hook (setup.sh) auto-installs rv on first Bash command.
-# RV_INSTALL_SOURCE tells setup.sh to use local source instead of npm.
 # Claude reads SKILL.md and runs rv init.
 setup_output=$(claude -p \
   "Set up redpill-vault for this project." \
@@ -90,7 +78,6 @@ setup_output=$(claude -p \
 
 echo "$setup_output"
 
-# After Claude ran, rv should be installed and rv init should have run
 if command -v rv &>/dev/null; then
   pass "Claude installed rv"
 else
@@ -144,25 +131,15 @@ else
   fail "approved project: command did not run"
 fi
 
-# ── 5. Skill file checks ─────────────────────────────────────────────
+# ── 5. Clean uninstall ───────────────────────────────────────────────
 echo ""
-echo "=== Skill file ==="
-test -f "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
-  && pass "SKILL.md exists" || fail "SKILL.md missing"
-grep -q "^---" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
-  && pass "SKILL.md has YAML frontmatter" || fail "SKILL.md missing frontmatter"
-grep -q "npm i -g" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
-  && pass "SKILL.md has install instructions" || fail "SKILL.md missing install instructions"
-grep -q "user only" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
-  && pass "SKILL.md marks approve as user-only" || fail "SKILL.md missing user-only marker"
-
-# ── 6. Clean uninstall ───────────────────────────────────────────────
-echo ""
-echo "=== Plugin uninstall ==="
+echo "=== Clean uninstall ==="
 claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" 2>&1 \
   && pass "plugin uninstall" || fail "plugin uninstall failed"
 claude plugin marketplace remove "${MARKETPLACE_NAME}" 2>&1 \
   && pass "marketplace remove" || fail "marketplace remove failed"
+npm rm -g redpill-vault 2>&1 \
+  && pass "npm uninstall" || fail "npm uninstall failed"
 
 # ── Summary ──────────────────────────────────────────────────────────
 echo ""

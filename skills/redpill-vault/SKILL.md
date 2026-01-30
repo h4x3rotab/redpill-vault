@@ -9,13 +9,7 @@ Secure credential manager for AI tools. Secrets are injected transparently into 
 
 ## Setup
 
-**You MUST install globally.** The PreToolUse hook requires `rv-hook` on PATH — `npx` will not work.
-
-```bash
-npm install -g redpill-vault
-```
-
-Then initialize in the project directory:
+The plugin hook auto-installs `redpill-vault` on first use. Run init in the project directory:
 
 ```bash
 rv init

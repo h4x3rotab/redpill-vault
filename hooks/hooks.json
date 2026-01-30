@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "rv-hook"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/setup.sh"
           }
         ]
       }
