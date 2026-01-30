@@ -35,6 +35,10 @@ const AGENT_BLOCKED_PATTERNS = [
 const SKIP_PREFIXES = ["rv-exec "];
 const SAFE_PSST = [/^psst\s+list\b/, /^psst\s+set\b/, /^psst\s+rm\b/, /^psst\s+init\b/, /^psst\s+scan\b/, /^psst\s+install-hook\b/, /^psst\s+import\b/];
 
+function shellEscape(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
 export function processCommand(command: string, cwd?: string): HookResult {
   const trimmed = command.trim();
 
@@ -93,7 +97,7 @@ export function processCommand(command: string, cwd?: string): HookResult {
   }
 
   const psstArgs = buildPsstArgs(config);
-  const wrapped = `rv-exec ${psstArgs.join(" ")} -- ${command}`;
+  const wrapped = `rv-exec ${psstArgs.join(" ")} -- bash -c ${shellEscape(command)}`;
   return { updatedInput: { command: wrapped } };
 }
 

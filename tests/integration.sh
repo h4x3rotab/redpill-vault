@@ -122,7 +122,7 @@ HOOK_INPUT=$(cat <<ENDJSON
 ENDJSON
 )
 HOOK_OUTPUT=$(echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null || true)
-if echo "$HOOK_OUTPUT" | grep -q "rv-exec TEST_SECRET -- echo hi"; then
+if echo "$HOOK_OUTPUT" | grep -q "rv-exec TEST_SECRET -- bash -c 'echo hi'"; then
   pass "hook wraps with rv-exec"
 else
   fail "hook output unexpected: $HOOK_OUTPUT"
@@ -141,9 +141,9 @@ fi
 
 HOOK_INPUT='{"tool_name":"Bash","tool_input":{"command":"rv init"},"cwd":"'"$FAKE_PROJECT"'"}'
 if echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null; then
-  fail "hook should have blocked rv init"
+  pass "hook allows rv init (agent runs it during setup)"
 else
-  pass "hook blocked rv init"
+  fail "hook should allow rv init"
 fi
 
 HOOK_INPUT='{"tool_name":"Bash","tool_input":{"command":"rv revoke"},"cwd":"'"$FAKE_PROJECT"'"}'

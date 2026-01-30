@@ -32,7 +32,7 @@ describe("hook processCommand", () => {
 
   it("wraps command with rv-exec args", () => {
     const r = processCommand("npm test", "/approved");
-    expect(r.updatedInput?.command).toBe("rv-exec OPENAI_API_KEY STRIPE=STRIPE_KEY -- npm test");
+    expect(r.updatedInput?.command).toBe("rv-exec OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'npm test'");
   });
 
   it("blocks psst get", () => {
@@ -77,6 +77,16 @@ describe("hook processCommand", () => {
 
   it("allows rv init from agent", () => {
     expect(processCommand("rv init", "/approved").decision).toBeUndefined();
+  });
+
+  it("escapes shell metacharacters in wrapped command", () => {
+    const r = processCommand("npm install && npm test", "/approved");
+    expect(r.updatedInput?.command).toBe("rv-exec OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'npm install && npm test'");
+  });
+
+  it("escapes single quotes in wrapped command", () => {
+    const r = processCommand("echo 'hello world'", "/approved");
+    expect(r.updatedInput?.command).toBe("rv-exec OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'echo '\\''hello world'\\'''");
   });
 
   it("blocks unapproved project", () => {
