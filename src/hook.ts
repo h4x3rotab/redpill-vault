@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { loadConfig, buildPsstArgs } from "./config.js";
+import { fileURLToPath } from "node:url";
 import { isApproved } from "./approval.js";
 
 interface HookInput {
@@ -153,4 +154,7 @@ async function main() {
   process.exit(0);
 }
 
-main();
+const isDirectRun = fileURLToPath(import.meta.url) === process.argv[1];
+if (isDirectRun) {
+  main();
+}
