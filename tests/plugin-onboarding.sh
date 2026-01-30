@@ -78,10 +78,10 @@ echo ""
 echo "=== Agent-driven setup ==="
 cd "$FAKE_PROJECT"
 
-# Claude reads SKILL.md, sees it needs to run npm i -g and rv init.
-# We point npm at the local project so it doesn't hit the registry.
-setup_output=$(RV_INSTALL_SOURCE="$PROJECT_DIR" claude -p \
-  "Set up redpill-vault for this project. The npm package source is at $PROJECT_DIR — install from there with: npm i -g $PROJECT_DIR" \
+# Claude reads SKILL.md to figure out how to install and init.
+# We only hint at the local path — Claude must discover the commands from the skill.
+setup_output=$(claude -p \
+  "Set up redpill-vault for this project. Note: the npm package is not published yet, use this local path instead of the registry: $PROJECT_DIR" \
   --allowedTools "Bash" \
   2>&1 || true)
 
