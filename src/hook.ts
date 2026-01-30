@@ -133,7 +133,12 @@ async function main() {
     return;
   }
 
-  const result = processCommand(parsed.tool_input.command, parsed.cwd);
+  const inferredCwd =
+    parsed.cwd ??
+    (parsed.tool_input as { cwd?: string }).cwd ??
+    process.env.CLAUDE_PROJECT_DIR ??
+    process.env.PWD;
+  const result = processCommand(parsed.tool_input.command, inferredCwd);
 
   if (result.decision === "block") {
     process.stderr.write(result.reason + "\n");
