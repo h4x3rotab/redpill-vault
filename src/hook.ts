@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { loadConfig, buildPsstArgs } from "./config.js";
+import { loadConfig, buildPsstArgs, findConfig } from "./config.js";
 import { fileURLToPath } from "node:url";
 import { isApproved } from "./approval.js";
+import { dirname } from "node:path";
 
 interface HookInput {
   tool_name: string;
@@ -38,6 +39,39 @@ const SAFE_PSST = [/^psst\s+(--global\s+)?(list|set|rm|init|scan|install-hook|im
 
 function shellEscape(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+function findConfigDir(start: string): string | null {
+  let dir = start;
+  while (true) {
+    if (findConfig(dir)) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function resolveConfig(candidates: Array<string | undefined>): {
+  config: ReturnType<typeof loadConfig>;
+  root?: string;
+  error?: string;
+} {
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    const root = findConfigDir(candidate);
+    if (!root) continue;
+    try {
+      const config = loadConfig(root);
+      return { config, root };
+    } catch {
+      return { config: null, root, error: "redpill-vault: invalid .rv.json — the user must run: rv init" };
+    }
+  }
+  return { config: null };
 }
 
 export function processCommand(command: string, cwd?: string): HookResult {
@@ -83,21 +117,26 @@ export function processCommand(command: string, cwd?: string): HookResult {
   if (trimmed.startsWith("rv ")) return {};
 
   // Try to load config and wrap with rv-exec
-  let config: ReturnType<typeof loadConfig>;
-  try {
-    config = loadConfig(cwd);
-  } catch {
-    return {
-      decision: "block",
-      reason: "redpill-vault: invalid .rv.json — the user must run: rv init",
-    };
+  const { config, root, error } = resolveConfig([
+    cwd,
+    process.env.CLAUDE_PROJECT_DIR,
+    process.env.CLAUDE_PROJECT_PATH,
+    process.env.CLAUDE_WORKSPACE_DIR,
+    process.env.CLAUDE_WORKSPACE,
+    process.env.PROJECT_DIR,
+    process.env.GIT_WORK_TREE,
+    process.env.PWD,
+    process.cwd(),
+  ]);
+  if (error) {
+    return { decision: "block", reason: error };
   }
   if (!config || Object.keys(config.secrets).length === 0) {
     return {}; // no config or no secrets → passthrough
   }
 
   // Check project approval (only if a config exists)
-  const effectiveCwd = cwd ?? process.cwd();
+  const effectiveCwd = root ?? cwd ?? process.cwd();
   if (!isApproved(effectiveCwd)) {
     return {
       decision: "block",

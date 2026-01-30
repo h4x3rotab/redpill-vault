@@ -14,7 +14,7 @@ const program = new Command();
 program
   .name("rv")
   .description("redpill-vault — secure credential manager for AI tools")
-  .version("0.1.5");
+  .version("0.1.6");
 
 function runInit() {
   // 1. Create master key
