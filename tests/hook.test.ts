@@ -75,8 +75,8 @@ describe("hook processCommand", () => {
     expect(processCommand("rv revoke", "/approved").decision).toBe("block");
   });
 
-  it("blocks rv init from agent", () => {
-    expect(processCommand("rv init", "/approved").decision).toBe("block");
+  it("allows rv init from agent", () => {
+    expect(processCommand("rv init", "/approved").decision).toBeUndefined();
   });
 
   it("blocks unapproved project", () => {

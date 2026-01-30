@@ -5,29 +5,38 @@ description: Secure credential manager for AI tools. Secrets are injected transp
 
 # redpill-vault
 
-Secure credential manager for AI tools. Secrets are injected transparently into shell commands via a PreToolUse hook — the agent never sees secret values or the master key.
+Secure credential manager for AI tools. Secrets are injected transparently into shell commands — the agent never sees secret values or the master key.
 
-## First-time project setup
+## Setup
 
-Run `rv init` in the project root. This will:
-- Create a master key (if not already present)
-- Initialize the psst vault (if not already present)
-- Create `.rv.json` in the current directory
-- Wire the `rv-hook` into `.claude/settings.json`
+Run these commands to install and initialize:
 
-**Note:** `rv init` and `rv approve` must be run by the user, not the agent. The hook blocks the agent from running these commands.
+```bash
+npm i -g redpill-vault
+```
+
+```bash
+rv init
+```
+
+Then tell the user to run this in their terminal (only the user can approve):
+
+```bash
+rv approve
+```
+
+**Important:** `rv approve` and `rv revoke` must be run by the user, not the agent. The hook blocks the agent from running these commands.
 
 ## Adding secrets
 
 ```bash
 rv add MY_SECRET -d "API key for the foobar service"
-psst set MY_SECRET --global
 ```
 
-Then approve the project:
+Then the user sets the value in the vault:
 
 ```bash
-rv approve
+psst set MY_SECRET --global
 ```
 
 ## How it works
@@ -36,13 +45,13 @@ Once approved, every Bash command the agent runs is automatically wrapped with `
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `rv init` | Full setup (master key + vault + config + hook) |
-| `rv add <KEY>` | Register a secret in `.rv.json` |
-| `rv remove <KEY>` | Remove a secret from `.rv.json` |
-| `rv list` | Show configured secrets |
-| `rv approve` | Approve this project for injection |
-| `rv revoke` | Revoke project approval |
-| `rv check` | Verify all keys exist in vault |
-| `rv doctor` | Full health check |
+| Command | Who | Description |
+|---------|-----|-------------|
+| `rv init` | agent or user | Full setup (master key + vault + config + hook) |
+| `rv add <KEY>` | agent or user | Register a secret in `.rv.json` |
+| `rv remove <KEY>` | agent or user | Remove a secret from `.rv.json` |
+| `rv list` | agent or user | Show configured secrets |
+| `rv check` | agent or user | Verify all keys exist in vault |
+| `rv doctor` | agent or user | Full health check |
+| `rv approve` | **user only** | Approve this project for injection |
+| `rv revoke` | **user only** | Revoke project approval |
