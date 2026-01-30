@@ -9,10 +9,10 @@ Secure credential manager for AI tools. Secrets are injected transparently into 
 
 ## Setup
 
-Run the install script (installs globally — required for the PreToolUse hook):
+**You MUST install globally.** The PreToolUse hook requires `rv-hook` on PATH — `npx` will not work.
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/setup.sh
+npm install -g redpill-vault
 ```
 
 Then initialize in the project directory:
@@ -21,13 +21,7 @@ Then initialize in the project directory:
 rv init
 ```
 
-Then tell the user to run this in their terminal (only the user can approve):
-
-```bash
-rv approve
-```
-
-**Important:** `rv approve` and `rv revoke` must be run by the user, not the agent. The hook blocks the agent from running these commands.
+Then tell the user to run `rv approve` in their terminal. Only the user can approve — the hook blocks the agent from running this command.
 
 ## Adding secrets
 
