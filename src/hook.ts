@@ -64,12 +64,15 @@ export function processCommand(command: string, cwd?: string): HookResult {
     if (trimmed.startsWith(prefix)) return {};
   }
 
-  // Allow safe psst subcommands, block others
+  // Allow safe psst subcommands, block unknown ones
   if (trimmed.startsWith("psst ")) {
     for (const safe of SAFE_PSST) {
       if (safe.test(trimmed)) return {};
     }
-    return {};
+    return {
+      decision: "block",
+      reason: "redpill-vault: blocked — unknown psst subcommand",
+    };
   }
 
   // rv commands (list, add, etc.) pass through

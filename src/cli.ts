@@ -15,13 +15,108 @@ program
   .description("redpill-vault — secure credential manager for AI tools")
   .version("0.1.0");
 
+function runInit() {
+  // 1. Create master key
+  const configDir = getRvConfigDir();
+  const masterKeyPath = getMasterKeyPath();
+  mkdirSync(configDir, { recursive: true });
+
+  if (existsSync(masterKeyPath)) {
+    console.log("Master key already exists at " + masterKeyPath);
+  } else {
+    const key = randomBytes(32).toString("hex");
+    writeFileSync(masterKeyPath, key + "\n", { mode: 0o600 });
+    chmodSync(masterKeyPath, 0o600);
+    console.log("Created master key at " + masterKeyPath);
+  }
+
+  // 2. Init psst vault
+  const masterKey = readFileSync(masterKeyPath, "utf-8").trim();
+  try {
+    execSync("psst init --global", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, PSST_PASSWORD: masterKey },
+    });
+    console.log("psst vault initialized");
+  } catch (err: unknown) {
+    const stderr = (err as { stderr?: string }).stderr ?? "";
+    const stdout = (err as { stdout?: string }).stdout ?? "";
+    if (stderr.includes("already exists") || stdout.includes("already exists")) {
+      console.log("psst vault already initialized");
+    } else {
+      console.error("Failed to initialize psst vault. Is psst installed?");
+      process.exit(1);
+    }
+  }
+
+  // 3. Create .rv.json if missing
+  const cwd = process.cwd();
+  const rvPath = join(cwd, CONFIG_FILENAME);
+  if (!existsSync(rvPath)) {
+    writeFileSync(rvPath, JSON.stringify({ secrets: {} }, null, 2) + "\n");
+    console.log(`Created ${CONFIG_FILENAME}`);
+  } else {
+    console.log(`${CONFIG_FILENAME} already exists`);
+  }
+
+  // 4. Wire rv-hook into .claude/settings.json
+  const claudeDir = join(cwd, ".claude");
+  mkdirSync(claudeDir, { recursive: true });
+  const settingsPath = join(claudeDir, "settings.json");
+
+  const hookDef = {
+    type: "command" as const,
+    command: "rv-hook",
+  };
+
+  let settings: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+  }
+
+  if (!settings.hooks) settings.hooks = {};
+  const hooks = settings.hooks as Record<string, unknown>;
+  if (!hooks.PreToolUse) hooks.PreToolUse = [];
+  const preToolUse = hooks.PreToolUse as Array<Record<string, unknown>>;
+
+  const alreadyInstalled = preToolUse.some(entry => {
+    const inner = entry.hooks as Array<Record<string, unknown>> | undefined;
+    return inner?.some(h => {
+      const cmd = String(h.command ?? "");
+      return cmd === "rv-hook" || cmd.includes("setup.sh");
+    });
+  });
+  if (!alreadyInstalled) {
+    // Check if the plugin is installed (hooks/hooks.json handles it)
+    let pluginInstalled = false;
+    try {
+      const out = execSync("claude plugin list 2>/dev/null", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      pluginInstalled = out.includes("redpill-vault");
+    } catch { /* claude not available or plugin not installed */ }
+
+    if (pluginInstalled) {
+      console.log("rv-hook provided by plugin (skipping settings.json wiring)");
+    } else {
+      preToolUse.push({ matcher: "Bash", hooks: [hookDef] });
+      console.log("Added rv-hook to .claude/settings.json");
+    }
+  } else {
+    console.log("rv-hook already configured");
+  }
+
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+  // 5. Summary
+  console.log("\nSetup complete. Next steps:");
+  console.log("  rv add <KEY>     — register a secret in this project");
+  console.log("  rv approve       — approve this project for secret injection");
+}
+
 program
   .command("setup", { hidden: true })
   .description("Alias for init")
-  .action(() => {
-    // Delegate to init
-    program.parse(["node", "rv", "init"]);
-  });
+  .action(runInit);
 
 program
   .command("list")
@@ -134,89 +229,7 @@ program
 program
   .command("init")
   .description("Full project setup: master key, psst vault, .rv.json, and hook wiring")
-  .action(() => {
-    // 1. Create master key
-    const configDir = getRvConfigDir();
-    const masterKeyPath = getMasterKeyPath();
-    mkdirSync(configDir, { recursive: true });
-
-    if (existsSync(masterKeyPath)) {
-      console.log("Master key already exists at " + masterKeyPath);
-    } else {
-      const key = randomBytes(32).toString("hex");
-      writeFileSync(masterKeyPath, key + "\n", { mode: 0o600 });
-      chmodSync(masterKeyPath, 0o600);
-      console.log("Created master key at " + masterKeyPath);
-    }
-
-    // 2. Init psst vault
-    const masterKey = readFileSync(masterKeyPath, "utf-8").trim();
-    try {
-      execSync("psst init --global", {
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, PSST_PASSWORD: masterKey },
-      });
-      console.log("psst vault initialized");
-    } catch (err: unknown) {
-      const stderr = (err as { stderr?: string }).stderr ?? "";
-      const stdout = (err as { stdout?: string }).stdout ?? "";
-      if (stderr.includes("already exists") || stdout.includes("already exists")) {
-        console.log("psst vault already initialized");
-      } else {
-        console.error("Failed to initialize psst vault. Is psst installed?");
-        process.exit(1);
-      }
-    }
-
-    // 3. Create .rv.json if missing
-    const cwd = process.cwd();
-    const rvPath = join(cwd, CONFIG_FILENAME);
-    if (!existsSync(rvPath)) {
-      writeFileSync(rvPath, JSON.stringify({ secrets: {} }, null, 2) + "\n");
-      console.log(`Created ${CONFIG_FILENAME}`);
-    } else {
-      console.log(`${CONFIG_FILENAME} already exists`);
-    }
-
-    // 4. Wire rv-hook into .claude/settings.json
-    const claudeDir = join(cwd, ".claude");
-    mkdirSync(claudeDir, { recursive: true });
-    const settingsPath = join(claudeDir, "settings.json");
-
-    const hookDef = {
-      type: "command" as const,
-      command: "rv-hook",
-    };
-
-    let settings: Record<string, unknown> = {};
-    if (existsSync(settingsPath)) {
-      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    }
-
-    if (!settings.hooks) settings.hooks = {};
-    const hooks = settings.hooks as Record<string, unknown>;
-    if (!hooks.PreToolUse) hooks.PreToolUse = [];
-    const preToolUse = hooks.PreToolUse as Array<Record<string, unknown>>;
-
-    const alreadyInstalled = preToolUse.some(entry => {
-      const inner = entry.hooks as Array<Record<string, unknown>> | undefined;
-      return inner?.some(h => h.command === "rv-hook");
-    });
-    if (!alreadyInstalled) {
-      preToolUse.push({ matcher: "Bash", hooks: [hookDef] });
-      console.log("Added rv-hook to .claude/settings.json");
-    } else {
-      console.log("rv-hook already configured");
-    }
-
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-
-    // 5. Summary
-    console.log("\nSetup complete. Next steps:");
-    console.log("  rv add <KEY>     — register a secret in this project");
-    console.log("  rv approve       — approve this project for secret injection");
-  });
+  .action(runInit);
 
 program
   .command("approve")

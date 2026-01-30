@@ -40,10 +40,10 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
   // 4. psst vault exists
   if (psstInstalled) {
     try {
-      execSync("psst list", { stdio: "pipe" });
+      execSync("psst --global list", { stdio: "pipe" });
       checks.push({ name: "psst vault", ok: true, message: "vault accessible" });
     } catch {
-      checks.push({ name: "psst vault", ok: false, message: "vault not initialized — run: psst init" });
+      checks.push({ name: "psst vault", ok: false, message: "vault not accessible — run: rv init" });
     }
   }
 
@@ -52,7 +52,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
   if (existsSync(configPath)) {
     checks.push({ name: CONFIG_FILENAME, ok: true, message: "config found" });
   } else {
-    checks.push({ name: CONFIG_FILENAME, ok: false, message: `${CONFIG_FILENAME} not found — run: rv setup` });
+    checks.push({ name: CONFIG_FILENAME, ok: false, message: `${CONFIG_FILENAME} not found — run: rv init` });
   }
 
   // 4. hook configured
@@ -60,7 +60,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
   if (existsSync(hookPath)) {
     checks.push({ name: "hook config", ok: true, message: ".claude/settings.json exists" });
   } else {
-    checks.push({ name: "hook config", ok: false, message: "hook not configured — run: rv setup" });
+    checks.push({ name: "hook config", ok: false, message: "hook not configured — run: rv init" });
   }
 
   // 5. keys present in vault
@@ -69,7 +69,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     if (config) {
       let vaultKeys: string[] = [];
       try {
-        const out = execSync("psst list", { encoding: "utf-8" });
+        const out = execSync("psst --global list", { encoding: "utf-8" });
         vaultKeys = out.trim().split("\n").filter(Boolean);
       } catch { /* empty */ }
       for (const key of Object.keys(config.secrets)) {
@@ -92,7 +92,7 @@ export function checkKeys(cwd: string = process.cwd()): Check[] {
 
   let vaultKeys: string[] = [];
   try {
-    const out = execSync("psst list", { encoding: "utf-8" });
+    const out = execSync("psst --global list", { encoding: "utf-8" });
     vaultKeys = out.trim().split("\n").filter(Boolean);
   } catch {
     return [{ name: "psst", ok: false, message: "cannot list vault keys" }];

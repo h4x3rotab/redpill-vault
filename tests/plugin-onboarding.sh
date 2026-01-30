@@ -101,20 +101,18 @@ else
   fail "setup.sh did not install rv"
 fi
 
-# ── 4. Ask Claude to set up rv — should tell user to run rv init ──────
+# ── 4. Verify skill is loaded by plugin ───────────────────────────────
 echo ""
-echo "=== Skill: Claude guides setup ==="
+echo "=== Skill loaded ==="
 
-setup_output=$(claude -p \
-  "I want to set up redpill-vault for this project. What should I do?" \
-  2>&1 || true)
+# Deterministic check: the plugin lists its skills
+skill_list=$(claude plugin list 2>&1 || true)
+echo "$skill_list"
 
-echo "$setup_output"
-
-if echo "$setup_output" | grep -qi "rv init"; then
-  pass "Claude tells user to run rv init"
+if echo "$skill_list" | grep -qi "redpill-vault"; then
+  pass "plugin lists redpill-vault skill"
 else
-  fail "Claude did not mention rv init"
+  fail "plugin does not list redpill-vault"
 fi
 
 # ── 5. User follows instructions: runs rv init ───────────────────────

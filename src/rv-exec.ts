@@ -45,6 +45,10 @@ if (!useKeychain) {
     process.exit(1);
   }
   const masterKey = readFileSync(getMasterKeyPath(), "utf-8").trim();
+  if (!masterKey) {
+    process.stderr.write("rv-exec: master key file is empty\nRun: rv init\n");
+    process.exit(1);
+  }
   process.env.PSST_PASSWORD = masterKey;
 }
 
