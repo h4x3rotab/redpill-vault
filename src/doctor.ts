@@ -47,7 +47,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     }
   }
 
-  // 3. .rv.json exists
+  // 5. .rv.json exists
   const configPath = join(cwd, CONFIG_FILENAME);
   if (existsSync(configPath)) {
     checks.push({ name: CONFIG_FILENAME, ok: true, message: "config found" });
@@ -55,7 +55,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     checks.push({ name: CONFIG_FILENAME, ok: false, message: `${CONFIG_FILENAME} not found — run: rv init` });
   }
 
-  // 4. hook configured
+  // 6. hook configured
   const hookPath = join(cwd, ".claude", "settings.json");
   if (existsSync(hookPath)) {
     checks.push({ name: "hook config", ok: true, message: ".claude/settings.json exists" });
@@ -63,7 +63,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     checks.push({ name: "hook config", ok: false, message: "hook not configured — run: rv init" });
   }
 
-  // 5. keys present in vault
+  // 7. keys present in vault
   if (psstInstalled) {
     const config = loadConfig(cwd);
     if (config) {
@@ -73,7 +73,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
         vaultKeys = out.trim().split("\n").filter(Boolean);
       } catch { /* empty */ }
       for (const key of Object.keys(config.secrets)) {
-        const found = vaultKeys.some(line => line.includes(key));
+        const found = vaultKeys.some(line => line.trim() === key || line.trim().startsWith(key + " "));
         checks.push({
           name: `key: ${key}`,
           ok: found,

@@ -34,7 +34,7 @@ skills/
 ## Development
 
 - `npm run build` — compile TypeScript
-- `npm test` — run vitest unit tests (29 tests)
+- `npm test` — run vitest unit tests (31 tests)
 - `bash tests/integration.sh` — run integration + e2e tests (19 tests, requires psst + claude)
 - `bash tests/plugin-e2e.sh` — plugin artifact validation + rv init (14 tests)
 - `bash tests/plugin-onboarding.sh` — full plugin onboarding flow (16 tests, requires claude CLI)

@@ -33,7 +33,7 @@ const AGENT_BLOCKED_PATTERNS = [
 ];
 
 const SKIP_PREFIXES = ["rv-exec "];
-const SAFE_PSST = [/^psst\s+list\b/, /^psst\s+set\b/, /^psst\s+rm\b/, /^psst\s+init\b/, /^psst\s+scan\b/, /^psst\s+install-hook\b/, /^psst\s+import\b/];
+const SAFE_PSST = [/^psst\s+(--global\s+)?(list|set|rm|init|scan|install-hook|import)\b/];
 
 function shellEscape(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";

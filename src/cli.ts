@@ -72,7 +72,11 @@ function runInit() {
 
   let settings: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
-    settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    } catch {
+      console.error("Warning: .claude/settings.json is malformed — overwriting");
+    }
   }
 
   if (!settings.hooks) settings.hooks = {};
