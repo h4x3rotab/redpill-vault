@@ -6,7 +6,8 @@
   "bin": {
     "rv": "./dist/cli.js",
     "rv-hook": "./dist/hook.js",
-    "rv-exec": "./dist/rv-exec.js"
+    "rv-exec": "./dist/rv-exec.js",
+    "psst": "./dist/psst-shim.js"
   },
   "scripts": {
     "build": "tsc",

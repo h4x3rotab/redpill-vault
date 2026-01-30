@@ -3,9 +3,10 @@ import { Command } from "commander";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { execSync, spawnSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { CONFIG_FILENAME, loadConfig } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
+import { runPsst } from "./psst.js";
 import { getRvConfigDir, getMasterKeyPath, approveProject, revokeProject, isApproved } from "./approval.js";
 
 const program = new Command();
@@ -33,7 +34,7 @@ function runInit() {
   // 2. Init psst vault
   const masterKey = readFileSync(masterKeyPath, "utf-8").trim();
   {
-    const result = spawnSync("psst", ["init", "--global"], {
+    const result = runPsst(["init", "--global"], {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, PSST_PASSWORD: masterKey },
@@ -45,11 +46,7 @@ function runInit() {
     } else if (stderr.includes("already exists") || stdout.includes("already exists")) {
       console.log("psst vault already initialized");
     } else {
-      if (result.error) {
-        console.error("Failed to initialize psst vault. Is psst installed?");
-      } else {
-        console.error("Failed to initialize psst vault. Is psst installed?");
-      }
+      console.error("Failed to initialize psst vault. Is psst installed?");
       process.exit(1);
     }
   }
@@ -173,12 +170,10 @@ program
     console.log(`Added ${key} to ${CONFIG_FILENAME}`);
 
     // Prompt to set in vault if psst available
-    try {
-      const out = execSync("psst list", { encoding: "utf-8" });
-      if (!out.includes(key)) {
-        console.log(`Hint: ${key} not in vault — run: psst set ${key}`);
-      }
-    } catch { /* psst not available */ }
+    const result = runPsst(["--global", "list"], { encoding: "utf-8" });
+    if (result.status === 0 && !result.stdout.includes(key)) {
+      console.log(`Hint: ${key} not in vault — run: psst set ${key}`);
+    }
   });
 
 program

@@ -1,7 +1,8 @@
-import { execSync, spawnSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, CONFIG_FILENAME } from "./config.js";
+import { runPsst } from "./psst.js";
 import { getMasterKeyPath, isApproved } from "./approval.js";
 
 export interface Check {
@@ -11,7 +12,7 @@ export interface Check {
 }
 
 function psstList(): { ok: boolean; output: string } {
-  const result = spawnSync("psst", ["--global", "list"], { encoding: "utf-8" });
+  const result = runPsst(["--global", "list"], { encoding: "utf-8" });
   if (result.status === 0) {
     return { ok: true, output: result.stdout ?? "" };
   }
@@ -23,11 +24,11 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
 
   // 1. psst installed
   let psstInstalled = false;
-  try {
-    execSync("psst --version", { stdio: "pipe" });
+  const version = runPsst(["--version"], { stdio: "pipe", encoding: "utf-8" });
+  if (version.status === 0) {
     psstInstalled = true;
     checks.push({ name: "psst installed", ok: true, message: "psst is available" });
-  } catch {
+  } else {
     checks.push({ name: "psst installed", ok: false, message: "psst not found — install from https://github.com/Michaelliv/psst" });
   }
 

@@ -6,7 +6,8 @@ Your keys are encrypted and sync privately across your devices. Stop pasting key
 
 ## Requirements
 
-- `psst` (installed automatically as a dependency)
+- Node.js
+- `psst` (installed automatically and exposed on PATH by this package)
 
 ## Install
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { runPsst } from "./psst.js";
 import { readFileSync, existsSync } from "node:fs";
 import { getMasterKeyPath } from "./approval.js";
 
@@ -28,7 +28,7 @@ if (keys.length === 0) {
 // Check if keychain auth works by running `psst list`
 let useKeychain = false;
 try {
-  const probe = spawnSync("psst", ["--global", "list"], { stdio: "pipe", timeout: 5000 });
+  const probe = runPsst(["--global", "list"], { stdio: "pipe", timeout: 5000, encoding: "utf-8" });
   if (probe.status === 0) {
     useKeychain = true;
   }
@@ -54,7 +54,7 @@ if (!useKeychain) {
 
 // Exec psst with the keys and command (always use global vault)
 const psstArgs = ["--global", ...keys, "--", ...command];
-const result = spawnSync("psst", psstArgs, {
+const result = runPsst(psstArgs, {
   stdio: "inherit",
   env: process.env,
 });
