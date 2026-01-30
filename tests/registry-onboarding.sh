@@ -69,11 +69,10 @@ echo ""
 echo "=== Agent-driven setup (from npm registry) ==="
 cd "$FAKE_PROJECT"
 
-# The hook (setup.sh) auto-installs rv on first Bash command.
-# Claude reads SKILL.md and runs rv init.
+# Claude invokes the redpill-vault skill, which runs setup.sh + rv init.
 setup_output=$(claude -p \
-  "Set up redpill-vault for this project." \
-  --allowedTools "Bash" \
+  "Use the redpill-vault skill to set up redpill-vault for this project." \
+  --allowedTools "Bash,Skill" \
   2>&1 || true)
 
 echo "$setup_output"
