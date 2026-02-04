@@ -12,7 +12,7 @@ Single global vault design: one master key at `~/.config/rv/master-key`, one pss
 src/
   cli.ts        — rv CLI (init, approve, revoke, list, import, set, rm, check, doctor)
   hook.ts       — Claude Code PreToolUse hook (approval gate, command rewriting, blocking)
-  rv-exec.ts    — wrapper binary that resolves psst auth + execs psst (agent never sees master key)
+  rv-exec.ts    — wrapper binary that resolves psst auth + execs psst (agent never sees master key). Supports --dotenv PATH to write a temp .env file.
   approval.ts   — approval store CRUD (~/.config/rv/approved.json)
   config.ts     — .rv.json loader/validator
   doctor.ts     — health checks
@@ -65,6 +65,8 @@ Each project can have its own credentials that override global ones. Resolution 
 - **`rv import .env`** reads a `.env` file and stores each key in the vault (project-scoped by default, `-g` for global). Also registers keys in `.rv.json`. Supports `KEY=value`, quoted values, `export` prefix, and comments. Values are piped to psst via stdin and never appear in stdout.
 - **`rv set KEY`** sets a single secret value from stdin (project-scoped by default, `-g` for global). Does not modify `.rv.json`. Blocked from agent — user only.
 - **`rv rm KEY`** removes a secret from the vault (project-scoped by default, `-g` for global). Does not modify `.rv.json`. Blocked from agent — user only.
+- **`rv-exec --dotenv PATH`** writes resolved secrets to a `.env` file before running the command, deletes it after. Used when a command needs a `.env` file (e.g. `rv-exec --dotenv .env -- phala deploy -e .env`). The hook does not auto-wrap this — the agent writes it explicitly. Already-wrapped `rv-exec` commands are skipped by the hook.
+- **Project-scoped key aliasing fix**: when `PROJECT__KEY` is resolved from the vault, rv-exec aliases it back to `KEY` so the env var name matches what the app expects.
 
 ## Claude Code plugin conventions
 
