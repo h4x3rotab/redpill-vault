@@ -23,9 +23,11 @@ Then tell the user to run `rv approve` in their terminal. Only the user can appr
 
 ## Adding secrets
 
-### Importing from .env (recommended)
+**Important:** There is no `rv add` command. Use `rv import` to add secrets.
 
-The fastest way to populate the vault:
+### Importing from .env
+
+To populate the vault from a `.env` file:
 
 ```bash
 rv import .env
