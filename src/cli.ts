@@ -315,10 +315,16 @@ program
 
     const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
 
-    // Read value from stdin
+    // Read value: prompt if interactive, otherwise read from stdin
     let value = "";
+    const isTTY = process.stdin.isTTY;
+    if (isTTY) {
+      process.stderr.write(`Enter value for ${key}: `);
+    }
     for await (const chunk of process.stdin) {
       value += chunk;
+      // In interactive mode, stop after first line
+      if (isTTY && value.includes("\n")) break;
     }
     value = value.replace(/\n$/, "");
 
