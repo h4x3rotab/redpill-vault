@@ -79,6 +79,14 @@ Once approved, every Bash command the agent runs is automatically wrapped with `
 
 **Listing secrets:** `rv list` shows each key's source — `[project]`, `[global]`, or `[missing]`.
 
+**Commands that need a .env file:** Some tools require a `.env` file instead of environment variables (e.g. `phala deploy -e .env`). Since `rv-exec` injects all secrets as env vars, you can generate the file inline within the same command:
+
+```bash
+env | grep -E '^(SECRET1|SECRET2|SECRET3)=' > .env && some-command -e .env && rm .env
+```
+
+This works because the entire command runs inside `rv-exec` where the env vars are available. The `.env` file is created, used, and deleted in one shot — the agent never sees the secret values.
+
 ## .rv.json
 
 ```json
