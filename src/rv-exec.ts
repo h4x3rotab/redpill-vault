@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { runPsst } from "./psst.js";
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { getMasterKeyPath } from "./approval.js";
 import { buildScopedKey } from "./config.js";
 
@@ -74,43 +75,74 @@ if (!useKeychain) {
   process.env.PSST_PASSWORD = masterKey;
 }
 
-// Resolve keys with project-scoped fallback
-let resolvedKeys = keys;
-if (projectName) {
-  // Get list of keys in vault to check which exist
-  const listResult = runPsst(["--global", "list"], {
-    encoding: "utf-8",
-    stdio: ["pipe", "pipe", "pipe"],
-    env: process.env,
-  });
-  const vaultKeys = new Set<string>();
-  if (listResult.status === 0) {
-    for (const line of (listResult.stdout ?? "").split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("#")) {
-        // psst list format: "● KEY" — strip bullet point and whitespace
-        const withoutBullet = trimmed.replace(/^[●•]\s*/, "");
-        const key = withoutBullet.split("=")[0].split(/\s+/)[0];
-        if (key && /^[A-Z_][A-Z0-9_]*$/.test(key)) vaultKeys.add(key);
-      }
+// Get list of keys in vault
+const listResult = runPsst(["--global", "list"], {
+  encoding: "utf-8",
+  stdio: ["pipe", "pipe", "pipe"],
+  env: process.env,
+});
+const vaultKeys = new Set<string>();
+if (listResult.status === 0) {
+  for (const line of (listResult.stdout ?? "").split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith("#")) {
+      // psst list format: "● KEY" — strip bullet point and whitespace
+      const withoutBullet = trimmed.replace(/^[●•]\s*/, "");
+      const key = withoutBullet.split("=")[0].split(/\s+/)[0];
+      if (key && /^[A-Z_][A-Z0-9_]*$/.test(key)) vaultKeys.add(key);
+    }
+  }
+}
+
+// Resolve keys: project-scoped fallback, then filter missing
+const resolvedKeys: string[] = [];
+const missingKeys: string[] = [];
+
+for (const keySpec of keys) {
+  const [key, alias] = keySpec.includes("=") ? keySpec.split("=", 2) : [keySpec, null];
+  const envName = alias ?? key;
+
+  // With --project, try project-scoped first
+  if (projectName) {
+    const projectKey = buildScopedKey(projectName, key);
+    if (vaultKeys.has(projectKey)) {
+      resolvedKeys.push(projectKey !== envName ? `${projectKey}=${envName}` : projectKey);
+      continue;
     }
   }
 
-  // For each key, prefer project-scoped if it exists (PROJECT__KEY format)
-  resolvedKeys = keys.map(keySpec => {
-    // Handle KEY=ALIAS format
-    const [key, alias] = keySpec.includes("=") ? keySpec.split("=", 2) : [keySpec, null];
-    const projectKey = buildScopedKey(projectName, key);
+  // Fallback to global key
+  if (vaultKeys.has(key)) {
+    resolvedKeys.push(alias ? `${key}=${alias}` : key);
+    continue;
+  }
 
-    // Check project-scoped first, fallback to global
-    const resolvedKey = vaultKeys.has(projectKey) ? projectKey : key;
+  // Key not found anywhere
+  missingKeys.push(envName);
+}
 
-    // Env var name: alias if set, otherwise original key name
-    const envName = alias ?? key;
+if (missingKeys.length > 0) {
+  process.stderr.write(`rv-exec: missing secrets (skipped): ${missingKeys.join(", ")}\n`);
+  process.stderr.write(`  Fix with: rv import .env  or  rv set KEY_NAME\n`);
+}
 
-    // Always use alias format when vault key differs from env name
-    return resolvedKey !== envName ? `${resolvedKey}=${envName}` : resolvedKey;
-  });
+// If no keys resolved, run command directly without psst
+if (resolvedKeys.length === 0) {
+  if (dotenvPath) {
+    // Write empty dotenv file so the command doesn't fail on missing file
+    writeFileSync(dotenvPath, "", { mode: 0o600 });
+  }
+  try {
+    const result = spawnSync(command[0], command.slice(1), {
+      stdio: "inherit",
+      env: process.env,
+    });
+    process.exit(result.status ?? 1);
+  } finally {
+    if (dotenvPath) {
+      try { unlinkSync(dotenvPath); } catch {}
+    }
+  }
 }
 
 // Write dotenv file if requested
