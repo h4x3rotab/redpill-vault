@@ -335,10 +335,10 @@ program
   });
 
 program
-  .command("rm <key>")
-  .description("Remove a secret from the vault")
-  .option("-g, --global", "Remove the global key (not project-scoped)")
-  .action((key: string, opts: { global?: boolean }) => {
+  .command("rm <keys...>")
+  .description("Remove one or more secrets from the vault")
+  .option("-g, --global", "Remove global keys (not project-scoped)")
+  .action((keys: string[], opts: { global?: boolean }) => {
     const cwd = process.cwd();
     const config = loadConfig();
     const projectName = config ? getProjectName(config, cwd) : null;
@@ -348,22 +348,30 @@ program
       process.exit(1);
     }
 
-    const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
-
     ensurePsstAuth();
 
-    const result = runPsst(["--global", "rm", vaultKey], {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    let failed = false;
+    for (const key of keys) {
+      const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
 
-    if (result.status === 0) {
-      console.log(`Removed ${vaultKey}`);
-    } else {
-      const stderr = (result.stderr ?? "").trim();
-      console.error(`Failed to remove ${vaultKey}: ${stderr || "unknown error"}`);
-      process.exit(1);
+      const result = runPsst(["--global", "rm", vaultKey], {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      if (result.status === 0) {
+        console.log(`Removed ${vaultKey}`);
+      } else {
+        const stderr = (result.stderr ?? "").trim();
+        if (stderr.includes("not found") || (result.stdout ?? "").includes("not found")) {
+          console.error(`Key not found: ${vaultKey}`);
+        } else {
+          console.error(`Failed to remove ${vaultKey}: ${stderr || "unknown error"}`);
+        }
+        failed = true;
+      }
     }
+    if (failed) process.exit(1);
   });
 
 program
