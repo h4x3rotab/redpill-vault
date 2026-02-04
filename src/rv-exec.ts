@@ -103,8 +103,20 @@ if (projectName) {
 // Exec psst with the resolved keys and command (always use global vault)
 const psstArgs = ["--global", ...resolvedKeys, "--", ...command];
 const result = runPsst(psstArgs, {
-  stdio: "inherit",
+  stdio: ["inherit", "inherit", "pipe"],
   env: process.env,
+  encoding: "utf-8",
 });
+
+if (result.status !== 0) {
+  // Rewrite psst error messages to avoid exposing internals
+  const stderr = (result.stderr ?? "").trim();
+  if (stderr) {
+    const cleaned = stderr
+      .replace(/psst\s+set\s+/g, "rv set ")
+      .replace(/\bpsst\b/g, "rv");
+    process.stderr.write(cleaned + "\n");
+  }
+}
 
 process.exit(result.status ?? 1);

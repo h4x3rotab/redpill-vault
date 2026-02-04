@@ -268,8 +268,18 @@ program
       });
 
       if (result.status === 0) {
-        console.log(`Imported ${key} → ${vaultKey}`);
-        imported++;
+        // Verify the key was actually stored
+        const verify = runPsst(["--global", "list"], {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const listed = (verify.stdout ?? "").includes(vaultKey);
+        if (listed) {
+          console.log(`Imported ${key} → ${vaultKey}`);
+          imported++;
+        } else {
+          console.error(`Warning: ${key} → ${vaultKey} reported success but not found in vault`);
+        }
       } else {
         const stderr = (result.stderr ?? "").trim();
         console.error(`Failed to import ${key}: ${stderr || "unknown error"}`);
