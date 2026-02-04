@@ -77,6 +77,29 @@ export function buildScopedKey(projectName: string, key: string): string {
   return `${normalizeProjectName(projectName)}__${key}`;
 }
 
+/** Parse a .env file into key-value pairs */
+export function parseEnvFile(content: string): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    // Skip empty lines and comments
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    // Strip optional "export " prefix
+    const stripped = trimmed.replace(/^export\s+/, "");
+    const eqIndex = stripped.indexOf("=");
+    if (eqIndex === -1) continue;
+    const key = stripped.slice(0, eqIndex).trim();
+    let value = stripped.slice(eqIndex + 1).trim();
+    // Strip surrounding quotes
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (key) entries.set(key, value);
+  }
+  return entries;
+}
+
 /** Build the psst key arguments from config. Returns keys in psst CLI format. */
 export function buildPsstArgs(config: RvConfig): string[] {
   const args: string[] = [];

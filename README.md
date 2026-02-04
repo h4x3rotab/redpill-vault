@@ -21,13 +21,10 @@ npm i -g redpill-vault
 # 1) Initialize vault + hook in your project
 rv init
 
-# 2) Register which secrets this repo is allowed to use
-rv add OPENAI_API_KEY
+# 2) Import secrets from an existing .env file
+rv import .env
 
-# 3) Store the secret in psst (global vault)
-psst --global set OPENAI_API_KEY
-
-# 4) Approve this project for injection
+# 3) Approve this project for injection
 rv approve
 ```
 
@@ -53,9 +50,9 @@ Claude will run `rv init`. You still need to run `rv approve` yourself.
 ## Common commands
 
 ```bash
-rv add <KEY>        # add key to .rv.json
-rv remove <KEY>     # remove key from .rv.json
-rv list             # list keys in .rv.json
+rv import .env      # import secrets from a .env file into vault + .rv.json
+rv import .env -g   # import as global keys
+rv list             # list keys with source ([project]/[global]/[missing])
 rv approve          # allow this project to inject its secrets
 rv revoke           # remove approval
 rv check            # verify keys exist in psst

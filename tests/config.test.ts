@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateConfig, buildPsstArgs, getProjectName, normalizeProjectName, buildScopedKey } from "../src/config.js";
+import { validateConfig, buildPsstArgs, getProjectName, normalizeProjectName, buildScopedKey, parseEnvFile } from "../src/config.js";
 
 describe("validateConfig", () => {
   it("accepts valid config", () => {
@@ -109,5 +109,49 @@ describe("buildScopedKey", () => {
 
   it("handles complex project names", () => {
     expect(buildScopedKey("my.cool-app", "SECRET")).toBe("MY_COOL_APP__SECRET");
+  });
+});
+
+describe("parseEnvFile", () => {
+  it("parses simple KEY=value pairs", () => {
+    const result = parseEnvFile("FOO=bar\nBAZ=qux");
+    expect(result.get("FOO")).toBe("bar");
+    expect(result.get("BAZ")).toBe("qux");
+  });
+
+  it("strips double quotes", () => {
+    const result = parseEnvFile('SECRET="my secret value"');
+    expect(result.get("SECRET")).toBe("my secret value");
+  });
+
+  it("strips single quotes", () => {
+    const result = parseEnvFile("SECRET='my secret value'");
+    expect(result.get("SECRET")).toBe("my secret value");
+  });
+
+  it("handles export prefix", () => {
+    const result = parseEnvFile("export API_KEY=abc123");
+    expect(result.get("API_KEY")).toBe("abc123");
+  });
+
+  it("skips comments and blank lines", () => {
+    const result = parseEnvFile("# comment\n\nKEY=val\n  # another comment");
+    expect(result.size).toBe(1);
+    expect(result.get("KEY")).toBe("val");
+  });
+
+  it("handles values with = in them", () => {
+    const result = parseEnvFile("DATABASE_URL=postgres://user:pass@host/db?opt=1");
+    expect(result.get("DATABASE_URL")).toBe("postgres://user:pass@host/db?opt=1");
+  });
+
+  it("skips lines without =", () => {
+    const result = parseEnvFile("NOVALUE\nKEY=val");
+    expect(result.size).toBe(1);
+  });
+
+  it("handles empty values", () => {
+    const result = parseEnvFile("EMPTY=");
+    expect(result.get("EMPTY")).toBe("");
   });
 });

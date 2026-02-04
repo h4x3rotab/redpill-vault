@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { CONFIG_FILENAME, loadConfig, getProjectName, buildScopedKey } from "./config.js";
+import { CONFIG_FILENAME, loadConfig, getProjectName, buildScopedKey, parseEnvFile } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
 import { runPsst } from "./psst.js";
 import { getRvConfigDir, getMasterKeyPath, approveProject, revokeProject, isApproved } from "./approval.js";
@@ -105,7 +105,8 @@ function runInit() {
 
   // 5. Summary
   console.log("\nSetup complete. Next steps:");
-  console.log("  rv add <KEY>     — register a secret in this project");
+  console.log("  rv import .env   — import secrets from a .env file");
+  console.log("  Edit .rv.json    — choose which keys to inject");
   console.log("  rv approve       — approve this project for secret injection");
 }
 
@@ -178,7 +179,7 @@ program
     }
     const entries = Object.entries(config.secrets);
     if (entries.length === 0) {
-      console.log("No secrets configured. Run: rv add <KEY>");
+      console.log("No secrets configured. Edit .rv.json to add keys.");
       return;
     }
 
@@ -209,17 +210,19 @@ program
   });
 
 program
-  .command("add <key>")
-  .description("Add a key to .rv.json and optionally set in vault")
-  .option("-d, --description <desc>", "AI-readable description")
-  .option("--as <name>", "Rename env var for this project")
-  .option("-t, --tag <tag>", "psst tag")
-  .option("-g, --global", "Store as global key (not project-scoped)")
-  .action((key: string, opts: { description?: string; as?: string; tag?: string; global?: boolean }) => {
+  .command("import <envfile> [keys...]")
+  .description("Import secrets from a .env file into the vault")
+  .option("-g, --global", "Import as global keys (not project-scoped)")
+  .action((envfile: string, filterKeys: string[], opts: { global?: boolean }) => {
     const cwd = process.cwd();
     const rvPath = join(cwd, CONFIG_FILENAME);
+    const envPath = join(cwd, envfile);
 
-    // Check if we're in a project
+    if (!existsSync(envPath)) {
+      console.error(`File not found: ${envfile}`);
+      process.exit(1);
+    }
+
     const hasConfig = existsSync(rvPath);
     if (!hasConfig && !opts.global) {
       console.error(`Not in a project (no ${CONFIG_FILENAME}). Use -g for global, or run: rv init`);
@@ -231,69 +234,57 @@ program
       config = JSON.parse(readFileSync(rvPath, "utf-8"));
     }
 
-    const entry: Record<string, string> = {};
-    if (opts.description) entry.description = opts.description;
-    if (opts.as) entry.as = opts.as;
-    if (opts.tag) entry.tag = opts.tag;
+    const projectName = hasConfig ? getProjectName(config as any, cwd) : null;
 
-    config.secrets[key] = entry;
+    ensurePsstAuth();
 
+    const entries = parseEnvFile(readFileSync(envPath, "utf-8"));
+    if (entries.size === 0) {
+      console.error(`No entries found in ${envfile}`);
+      process.exit(1);
+    }
+
+    // Filter to specific keys if provided
+    const keysToImport = filterKeys.length > 0
+      ? [...entries.entries()].filter(([k]) => filterKeys.includes(k))
+      : [...entries.entries()];
+
+    if (keysToImport.length === 0) {
+      console.error(`None of the specified keys found in ${envfile}`);
+      process.exit(1);
+    }
+
+    let imported = 0;
+    for (const [key, value] of keysToImport) {
+      const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
+
+      // Store in psst vault via stdin (value never appears in args or stdout)
+      const result = runPsst(["--global", "set", vaultKey, "--stdin"], {
+        encoding: "utf-8",
+        input: value,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      if (result.status === 0) {
+        console.log(`Imported ${key} → ${vaultKey}`);
+        imported++;
+      } else {
+        const stderr = (result.stderr ?? "").trim();
+        console.error(`Failed to import ${key}: ${stderr || "unknown error"}`);
+      }
+
+      // Register in .rv.json if not already there
+      if (hasConfig && !config.secrets[key]) {
+        config.secrets[key] = {};
+      }
+    }
+
+    // Save updated config
     if (hasConfig) {
       writeFileSync(rvPath, JSON.stringify(config, null, 2) + "\n");
-      console.log(`Added ${key} to ${CONFIG_FILENAME}`);
     }
 
-    // Determine the vault key name (PROJECT__KEY format for project-scoped)
-    const projectName = hasConfig ? getProjectName(config as any, cwd) : null;
-    const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
-
-    // Check if key exists in vault
-    const result = runPsst(["--global", "list"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    const vaultKeys = new Set((result.stdout ?? "").split("\n").map(l => l.trim().split(/\s+/)[0]));
-
-    if (!vaultKeys.has(vaultKey)) {
-      if (opts.global) {
-        console.log(`Hint: ${key} not in vault — run: psst --global set ${key}`);
-      } else {
-        console.log(`Hint: ${vaultKey} not in vault — run: psst --global set ${vaultKey}`);
-      }
-    } else {
-      console.log(`Using ${opts.global ? "global" : "project-scoped"} key: ${vaultKey}`);
-    }
-  });
-
-program
-  .command("remove <key>")
-  .description("Remove a key from .rv.json (does not delete from vault)")
-  .option("-g, --global", "Also remove the global key from vault")
-  .option("--vault", "Also remove the key from vault")
-  .action((key: string, opts: { global?: boolean; vault?: boolean }) => {
-    const cwd = process.cwd();
-    const rvPath = join(cwd, CONFIG_FILENAME);
-    if (!existsSync(rvPath)) {
-      console.error(`No ${CONFIG_FILENAME} found.`);
-      process.exit(1);
-    }
-    const config = JSON.parse(readFileSync(rvPath, "utf-8"));
-    if (!config.secrets[key]) {
-      console.error(`Key "${key}" not in ${CONFIG_FILENAME}`);
-      process.exit(1);
-    }
-    delete config.secrets[key];
-    writeFileSync(rvPath, JSON.stringify(config, null, 2) + "\n");
-    console.log(`Removed ${key} from ${CONFIG_FILENAME}`);
-
-    // Optionally remove from vault
-    if (opts.vault) {
-      const projectName = getProjectName(config, cwd);
-      const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
-      const result = runPsst(["--global", "rm", vaultKey], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-      if (result.status === 0) {
-        console.log(`Removed ${vaultKey} from vault`);
-      } else {
-        console.log(`Note: ${vaultKey} was not in vault`);
-      }
-    }
+    console.log(`\nImported ${imported}/${keysToImport.length} secrets.`);
   });
 
 program

@@ -98,7 +98,13 @@ fi
 # ── 3. Hook blocks unapproved project ────────────────────────────────
 echo ""
 echo "=== Hook blocks unapproved project ==="
-rv add TEST_KEY -d "test secret" 2>&1
+# Add a test key to .rv.json so the hook has secrets to check
+python3 -c "
+import json
+with open('.rv.json') as f: cfg = json.load(f)
+cfg['secrets']['TEST_KEY'] = {'description': 'test secret'}
+with open('.rv.json', 'w') as f: json.dump(cfg, f, indent=2)
+"
 
 hook_output=$(claude -p "Run this exact bash command: echo hello" \
   --allowedTools "Bash" \
@@ -116,7 +122,13 @@ fi
 echo ""
 echo "=== User runs rv approve ==="
 rv approve 2>&1
-rv remove TEST_KEY 2>&1
+# Remove test key from .rv.json
+python3 -c "
+import json
+with open('.rv.json') as f: cfg = json.load(f)
+cfg['secrets'].pop('TEST_KEY', None)
+with open('.rv.json', 'w') as f: json.dump(cfg, f, indent=2)
+"
 
 approve_output=$(claude -p "Run this exact bash command: echo rv-plugin-test-ok" \
   --allowedTools "Bash" \

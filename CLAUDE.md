@@ -10,7 +10,7 @@ Single global vault design: one master key at `~/.config/rv/master-key`, one pss
 
 ```
 src/
-  cli.ts        — rv CLI (init, approve, revoke, list, add, remove, check, doctor)
+  cli.ts        — rv CLI (init, approve, revoke, list, import, check, doctor)
   hook.ts       — Claude Code PreToolUse hook (approval gate, command rewriting, blocking)
   rv-exec.ts    — wrapper binary that resolves psst auth + execs psst (agent never sees master key)
   approval.ts   — approval store CRUD (~/.config/rv/approved.json)
@@ -34,7 +34,7 @@ skills/
 ## Development
 
 - `npm run build` — compile TypeScript
-- `npm test` — run vitest unit tests (46 tests)
+- `npm test` — run vitest unit tests (55 tests)
 - `bash tests/integration.sh` — run integration + e2e tests (19 tests, requires psst + claude)
 - `bash tests/plugin-e2e.sh` — plugin artifact validation + rv init (14 tests)
 - `bash tests/plugin-onboarding.sh` — full plugin onboarding flow (16 tests, requires claude CLI)
@@ -58,10 +58,11 @@ Each project can have its own credentials that override global ones. Resolution 
 
 - **Project name** comes from `.rv.json` `"project"` field, or `basename(cwd)` if not set.
 - **Vault key format:** `PROJECT__KEY` (double underscore, all uppercase). Example: project `my-app` with key `GITHUB_TOKEN` → `MY_APP__GITHUB_TOKEN`.
-- **`rv add KEY`** defaults to project-scoped when in a project. Use `-g` for global. Outside a project, `-g` is required.
+- **No `rv add`/`rv remove` commands.** Users edit `.rv.json` directly to choose which keys get injected.
 - **`rv list`** shows `[project]`, `[global]`, or `[missing]` source for each key.
 - **Hook passes `--project NAME`** to `rv-exec`, which resolves each key by checking the scoped name first, falling back to global.
 - **psst list output uses bullet points** (`● KEY`). The CLI and rv-exec strip these when parsing vault contents.
+- **`rv import .env`** reads a `.env` file and stores each key in the vault (project-scoped by default, `-g` for global). Also registers keys in `.rv.json`. Supports `KEY=value`, quoted values, `export` prefix, and comments. Values are piped to psst via stdin and never appear in stdout.
 
 ## Claude Code plugin conventions
 

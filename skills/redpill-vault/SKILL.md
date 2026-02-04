@@ -23,25 +23,40 @@ Then tell the user to run `rv approve` in their terminal. Only the user can appr
 
 ## Adding secrets
 
-Secrets are project-scoped by default. The project name comes from the `"project"` field in `.rv.json`, or the directory name if not set.
+### Importing from .env (recommended)
+
+The fastest way to populate the vault:
 
 ```bash
-# Project-scoped (stored as MYPROJECT__MY_SECRET in vault)
-rv add MY_SECRET -d "API key for the foobar service"
-
-# Global (shared across all projects)
-rv add MY_SECRET -g -d "API key for the foobar service"
+rv import .env
 ```
 
-Then the user sets the value in the vault. The hint from `rv add` shows the exact key name to use:
+This reads the `.env` file, stores each key as a project-scoped secret in the vault, and registers it in `.rv.json`. Secret values go directly to psst and never appear in stdout.
 
-```bash
-# Project-scoped key
-psst --global set MYPROJECT__MY_SECRET
+To import specific keys only: `rv import .env GITHUB_TOKEN DATABASE_URL`
+To import as global keys: `rv import .env -g`
 
-# Global key
-psst --global set MY_SECRET
+The user can also run `rv import .env` directly in their terminal to add new keys at any time.
+
+### Editing .rv.json directly
+
+To control which keys get injected, edit `.rv.json` directly. Each key in the `secrets` object will be injected as an env var:
+
+```json
+{
+  "secrets": {
+    "GITHUB_TOKEN": { "description": "GitHub API token" },
+    "DATABASE_URL": {}
+  }
+}
 ```
+
+### When secrets are missing
+
+If `rv list` shows `[missing]` for a key, tell the user to run one of these in their terminal:
+
+- `rv import .env` — to bulk-import from an env file
+- `psst --global set VAULT_KEY_NAME` — to set a single key manually
 
 ## How it works
 
@@ -70,10 +85,8 @@ The `"project"` field is optional. If omitted, the directory name is used.
 | Command | Who | Description |
 |---------|-----|-------------|
 | `rv init` | agent or user | Full setup (master key + vault + config + hook) |
-| `rv add <KEY>` | agent or user | Register a secret (project-scoped by default) |
-| `rv add <KEY> -g` | agent or user | Register a global secret |
-| `rv remove <KEY>` | agent or user | Remove a secret from `.rv.json` |
-| `rv remove <KEY> --vault` | agent or user | Also remove from vault |
+| `rv import .env` | agent or user | Import secrets from a .env file into vault |
+| `rv import .env -g` | agent or user | Import as global keys |
 | `rv list` | agent or user | Show secrets with source (`[project]`/`[global]`/`[missing]`) |
 | `rv list -g` | agent or user | Show only global keys in vault |
 | `rv check` | agent or user | Verify all keys exist in vault |
