@@ -207,11 +207,13 @@ program
       if (entry.tag) line += ` [${entry.tag}]`;
       console.log(line);
     }
+    console.log("\nTip: rv list -g — show all global keys in vault");
+    console.log("     rv set KEY — set a secret | rv rm KEY — remove a secret");
   });
 
 program
   .command("import <envfile> [keys...]")
-  .description("Import secrets from a .env file into the vault")
+  .description("Import all secrets from a .env file into the vault (or specify keys to import)")
   .option("-g, --global", "Import as global keys (not project-scoped)")
   .action((envfile: string, filterKeys: string[], opts: { global?: boolean }) => {
     const cwd = process.cwd();
@@ -328,6 +330,38 @@ program
     } else {
       const stderr = (result.stderr ?? "").trim();
       console.error(`Failed to set ${vaultKey}: ${stderr || "unknown error"}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("rm <key>")
+  .description("Remove a secret from the vault")
+  .option("-g, --global", "Remove the global key (not project-scoped)")
+  .action((key: string, opts: { global?: boolean }) => {
+    const cwd = process.cwd();
+    const config = loadConfig();
+    const projectName = config ? getProjectName(config, cwd) : null;
+
+    if (!opts.global && !projectName) {
+      console.error(`Not in a project (no ${CONFIG_FILENAME}). Use -g for global, or run: rv init`);
+      process.exit(1);
+    }
+
+    const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
+
+    ensurePsstAuth();
+
+    const result = runPsst(["--global", "rm", vaultKey], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    if (result.status === 0) {
+      console.log(`Removed ${vaultKey}`);
+    } else {
+      const stderr = (result.stderr ?? "").trim();
+      console.error(`Failed to remove ${vaultKey}: ${stderr || "unknown error"}`);
       process.exit(1);
     }
   });

@@ -7,7 +7,7 @@
     {
       "name": "redpill-vault",
       "source": "./",
-      "description": "Secure credential manager for AI tools — transparent secret injection via psst",
+      "description": "Secure credential manager for AI tools — transparent secret injection from an encrypted vault",
       "strict": false,
       "keywords": ["secrets", "vault", "credentials", "hook"],
       "skills": ["./skills/redpill-vault"]

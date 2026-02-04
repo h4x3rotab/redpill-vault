@@ -33,6 +33,7 @@ const AGENT_BLOCKED_PATTERNS = [
   /^rv\s+approve\b/,
   /^rv\s+revoke\b/,
   /^rv\s+set\b/,
+  /^rv\s+rm\b/,
 ];
 
 const SKIP_PREFIXES = ["rv-exec "];

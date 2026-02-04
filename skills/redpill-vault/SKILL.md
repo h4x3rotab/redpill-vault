@@ -31,7 +31,7 @@ The fastest way to populate the vault:
 rv import .env
 ```
 
-This reads the `.env` file, stores each key as a project-scoped secret in the vault, and registers it in `.rv.json`. Secret values go directly to psst and never appear in stdout.
+This imports **all** keys from the `.env` file, stores each as a project-scoped secret in the vault, and registers it in `.rv.json`. Secret values go directly to the encrypted vault and never appear in stdout.
 
 To import specific keys only: `rv import .env GITHUB_TOKEN DATABASE_URL`
 To import as global keys: `rv import .env -g`
@@ -51,6 +51,17 @@ To control which keys get injected, edit `.rv.json` directly. Each key in the `s
 }
 ```
 
+### Setting or removing a single secret
+
+The user can set or remove individual secrets in their terminal:
+
+- `rv set KEY_NAME` — reads value from stdin, stores as project-scoped key
+- `rv set KEY_NAME -g` — stores as global key
+- `rv rm KEY_NAME` — removes the project-scoped key from vault
+- `rv rm KEY_NAME -g` — removes the global key from vault
+
+These commands only affect the vault — they do not modify `.rv.json`. The agent is blocked from running `rv set` and `rv rm`.
+
 ### When secrets are missing
 
 If `rv list` shows `[missing]` for a key, tell the user to run one of these in their terminal:
@@ -60,7 +71,7 @@ If `rv list` shows `[missing]` for a key, tell the user to run one of these in t
 
 ## How it works
 
-Once approved, every Bash command the agent runs is automatically wrapped with `rv-exec`, which injects the secrets listed in `.rv.json` as environment variables. The agent never sees the secret values — they are resolved at execution time by `rv-exec` using the psst vault.
+Once approved, every Bash command the agent runs is automatically wrapped with `rv-exec`, which injects the secrets listed in `.rv.json` as environment variables. The agent never sees the secret values — they are resolved at execution time by `rv-exec` from the encrypted vault.
 
 **Project-scoped fallback:** For each key, `rv-exec` checks for a project-scoped key (`PROJECT__KEY`) first, then falls back to the global key (`KEY`). This means a project can override global credentials or inherit them without any extra config.
 
@@ -85,12 +96,13 @@ The `"project"` field is optional. If omitted, the directory name is used.
 | Command | Who | Description |
 |---------|-----|-------------|
 | `rv init` | agent or user | Full setup (master key + vault + config + hook) |
-| `rv import .env` | agent or user | Import secrets from a .env file into vault |
+| `rv import .env` | agent or user | Import all secrets from a .env file into vault |
 | `rv import .env -g` | agent or user | Import as global keys |
 | `rv list` | agent or user | Show secrets with source (`[project]`/`[global]`/`[missing]`) |
 | `rv list -g` | agent or user | Show only global keys in vault |
 | `rv check` | agent or user | Verify all keys exist in vault |
 | `rv doctor` | agent or user | Full health check |
 | `rv set KEY` | **user only** | Set a single secret (reads value from stdin) |
+| `rv rm KEY` | **user only** | Remove a secret from vault |
 | `rv approve` | **user only** | Approve this project for injection |
 | `rv revoke` | **user only** | Revoke project approval |

@@ -7,7 +7,7 @@ Your keys are encrypted and sync privately across your devices. Stop pasting key
 ## Requirements
 
 - Node.js
-- `psst` (installed automatically and exposed on PATH by this package)
+- Encryption backend is bundled and installed automatically
 
 ## Install
 
@@ -54,14 +54,16 @@ rv import .env      # import secrets from a .env file into vault + .rv.json
 rv import .env -g   # import as global keys
 rv set KEY          # set a single secret (reads value from stdin)
 rv set KEY -g       # set as global key
+rv rm KEY           # remove a secret from vault
+rv rm KEY -g        # remove a global key
 rv list             # list keys with source ([project]/[global]/[missing])
 rv approve          # allow this project to inject its secrets
 rv revoke           # remove approval
-rv check            # verify keys exist in psst
+rv check            # verify keys exist in vault
 rv doctor           # full health check
 ```
 
 ## Notes
 
 - Secrets are injected per-project based on `.rv.json` and approval state.
-- The agent never sees secret values; `rv-exec` resolves them at execution time via `psst`.
+- The agent never sees secret values; `rv-exec` resolves them at execution time from the encrypted vault.
