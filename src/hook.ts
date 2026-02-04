@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadConfig, buildPsstArgs, findConfig } from "./config.js";
+import { loadConfig, buildPsstArgs, findConfig, getProjectName } from "./config.js";
 import { fileURLToPath } from "node:url";
 import { isApproved } from "./approval.js";
 import { dirname } from "node:path";
@@ -145,7 +145,9 @@ export function processCommand(command: string, cwd?: string): HookResult {
   }
 
   const psstArgs = buildPsstArgs(config);
-  const wrapped = `rv-exec ${psstArgs.join(" ")} -- bash -c ${shellEscape(command)}`;
+  const projectName = getProjectName(config, effectiveCwd);
+  const projectArg = projectName ? `--project ${shellEscape(projectName)} ` : "";
+  const wrapped = `rv-exec ${projectArg}${psstArgs.join(" ")} -- bash -c ${shellEscape(command)}`;
   return { updatedInput: { command: wrapped } };
 }
 

@@ -122,8 +122,9 @@ HOOK_INPUT=$(cat <<ENDJSON
 ENDJSON
 )
 HOOK_OUTPUT=$(echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null || true)
-if echo "$HOOK_OUTPUT" | grep -q "rv-exec TEST_SECRET -- bash -c 'echo hi'"; then
-  pass "hook wraps with rv-exec"
+# Now includes --project flag with derived project name (temp dir basename)
+if echo "$HOOK_OUTPUT" | grep -q "rv-exec --project .* TEST_SECRET -- bash -c 'echo hi'"; then
+  pass "hook wraps with rv-exec and project"
 else
   fail "hook output unexpected: $HOOK_OUTPUT"
 fi

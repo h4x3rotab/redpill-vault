@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 
 export interface SecretEntry {
   description?: string;
@@ -8,6 +8,7 @@ export interface SecretEntry {
 }
 
 export interface RvConfig {
+  project?: string;
   secrets: Record<string, SecretEntry>;
 }
 
@@ -30,6 +31,9 @@ export function validateConfig(raw: unknown): RvConfig {
     throw new Error(".rv.json must have a \"secrets\" object");
   }
   const obj = raw as Record<string, unknown>;
+  if (obj.project !== undefined && typeof obj.project !== "string") {
+    throw new Error(".rv.json \"project\" must be a string");
+  }
   if (typeof obj.secrets !== "object" || obj.secrets === null) {
     throw new Error(".rv.json \"secrets\" must be an object");
   }
@@ -50,6 +54,27 @@ export function validateConfig(raw: unknown): RvConfig {
     }
   }
   return raw as RvConfig;
+}
+
+/** Get project name from config or derive from directory basename */
+export function getProjectName(config: RvConfig | null, cwd: string): string | null {
+  if (!config) return null;
+  if (config.project) return config.project;
+  return basename(cwd);
+}
+
+/** Convert project name to psst-compatible format (uppercase, underscores) */
+export function normalizeProjectName(name: string): string {
+  return name
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+/** Build a project-scoped vault key name: PROJECT__KEY */
+export function buildScopedKey(projectName: string, key: string): string {
+  return `${normalizeProjectName(projectName)}__${key}`;
 }
 
 /** Build the psst key arguments from config. Returns keys in psst CLI format. */

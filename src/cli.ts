@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { CONFIG_FILENAME, loadConfig } from "./config.js";
+import { CONFIG_FILENAME, loadConfig, getProjectName, buildScopedKey } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
 import { runPsst } from "./psst.js";
 import { getRvConfigDir, getMasterKeyPath, approveProject, revokeProject, isApproved } from "./approval.js";
@@ -114,11 +114,64 @@ program
   .description("Alias for init")
   .action(runInit);
 
+/** Ensure psst auth is available (keychain or master key) */
+function ensurePsstAuth(): void {
+  if (process.env.PSST_PASSWORD) return;
+  // Try keychain first
+  const probe = runPsst(["--global", "list"], { stdio: "pipe", timeout: 5000, encoding: "utf-8" });
+  if (probe.status === 0) return;
+  // Fall back to master key
+  const mkPath = getMasterKeyPath();
+  if (existsSync(mkPath)) {
+    const key = readFileSync(mkPath, "utf-8").trim();
+    if (key) process.env.PSST_PASSWORD = key;
+  }
+}
+
+/** Get list of keys in psst vault */
+function getVaultKeys(): Set<string> {
+  try {
+    ensurePsstAuth();
+    const result = runPsst(["--global", "list"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    if (result.status !== 0) return new Set();
+    const keys = new Set<string>();
+    for (const line of (result.stdout ?? "").split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("#")) {
+        // psst list format: "● KEY" or "KEY" — strip bullet point and whitespace
+        const withoutBullet = trimmed.replace(/^[●•]\s*/, "");
+        const key = withoutBullet.split("=")[0].split(/\s+/)[0];
+        if (key && /^[A-Z_][A-Z0-9_]*$/.test(key)) keys.add(key);
+      }
+    }
+    return keys;
+  } catch {
+    return new Set();
+  }
+}
+
 program
   .command("list")
-  .description("Show secrets from .rv.json with descriptions")
-  .action(() => {
+  .description("Show secrets from .rv.json with descriptions and source")
+  .option("-g, --global", "Show only global keys in vault")
+  .action((opts: { global?: boolean }) => {
+    const cwd = process.cwd();
     const config = loadConfig();
+
+    if (opts.global) {
+      // Show global keys only (exclude PROJECT__KEY scoped keys)
+      const vaultKeys = getVaultKeys();
+      const globalKeys = [...vaultKeys].filter(k => !k.includes("__")).sort();
+      if (globalKeys.length === 0) {
+        console.log("No global keys in vault.");
+        return;
+      }
+      for (const key of globalKeys) {
+        console.log(key);
+      }
+      return;
+    }
+
     if (!config) {
       console.error(`No ${CONFIG_FILENAME} found. Run: rv init`);
       process.exit(1);
@@ -128,9 +181,27 @@ program
       console.log("No secrets configured. Run: rv add <KEY>");
       return;
     }
+
+    const projectName = getProjectName(config, cwd);
+    const vaultKeys = getVaultKeys();
+
     for (const [key, entry] of entries) {
       let line = key;
       if (entry.as) line += ` → ${entry.as}`;
+
+      // Determine source: project-scoped key format is PROJECT__KEY
+      const projectKey = projectName ? buildScopedKey(projectName, key) : null;
+      const hasProjectKey = projectKey && vaultKeys.has(projectKey);
+      const hasGlobalKey = vaultKeys.has(key);
+
+      if (hasProjectKey) {
+        line += " [project]";
+      } else if (hasGlobalKey) {
+        line += " [global]";
+      } else {
+        line += " [missing]";
+      }
+
       if (entry.description) line += ` — ${entry.description}`;
       if (entry.tag) line += ` [${entry.tag}]`;
       console.log(line);
@@ -139,15 +210,24 @@ program
 
 program
   .command("add <key>")
-  .description("Add a key to .rv.json")
+  .description("Add a key to .rv.json and optionally set in vault")
   .option("-d, --description <desc>", "AI-readable description")
   .option("--as <name>", "Rename env var for this project")
   .option("-t, --tag <tag>", "psst tag")
-  .action((key: string, opts: { description?: string; as?: string; tag?: string }) => {
+  .option("-g, --global", "Store as global key (not project-scoped)")
+  .action((key: string, opts: { description?: string; as?: string; tag?: string; global?: boolean }) => {
     const cwd = process.cwd();
     const rvPath = join(cwd, CONFIG_FILENAME);
-    let config = { secrets: {} as Record<string, Record<string, string>> };
-    if (existsSync(rvPath)) {
+
+    // Check if we're in a project
+    const hasConfig = existsSync(rvPath);
+    if (!hasConfig && !opts.global) {
+      console.error(`Not in a project (no ${CONFIG_FILENAME}). Use -g for global, or run: rv init`);
+      process.exit(1);
+    }
+
+    let config: { project?: string; secrets: Record<string, Record<string, string>> } = { secrets: {} };
+    if (hasConfig) {
       config = JSON.parse(readFileSync(rvPath, "utf-8"));
     }
 
@@ -157,20 +237,37 @@ program
     if (opts.tag) entry.tag = opts.tag;
 
     config.secrets[key] = entry;
-    writeFileSync(rvPath, JSON.stringify(config, null, 2) + "\n");
-    console.log(`Added ${key} to ${CONFIG_FILENAME}`);
 
-    // Prompt to set in vault if psst available
-    const result = runPsst(["--global", "list"], { encoding: "utf-8" });
-    if (result.status === 0 && !result.stdout.includes(key)) {
-      console.log(`Hint: ${key} not in vault — run: psst set ${key}`);
+    if (hasConfig) {
+      writeFileSync(rvPath, JSON.stringify(config, null, 2) + "\n");
+      console.log(`Added ${key} to ${CONFIG_FILENAME}`);
+    }
+
+    // Determine the vault key name (PROJECT__KEY format for project-scoped)
+    const projectName = hasConfig ? getProjectName(config as any, cwd) : null;
+    const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
+
+    // Check if key exists in vault
+    const result = runPsst(["--global", "list"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    const vaultKeys = new Set((result.stdout ?? "").split("\n").map(l => l.trim().split(/\s+/)[0]));
+
+    if (!vaultKeys.has(vaultKey)) {
+      if (opts.global) {
+        console.log(`Hint: ${key} not in vault — run: psst --global set ${key}`);
+      } else {
+        console.log(`Hint: ${vaultKey} not in vault — run: psst --global set ${vaultKey}`);
+      }
+    } else {
+      console.log(`Using ${opts.global ? "global" : "project-scoped"} key: ${vaultKey}`);
     }
   });
 
 program
   .command("remove <key>")
-  .description("Remove a key from .rv.json")
-  .action((key: string) => {
+  .description("Remove a key from .rv.json (does not delete from vault)")
+  .option("-g, --global", "Also remove the global key from vault")
+  .option("--vault", "Also remove the key from vault")
+  .action((key: string, opts: { global?: boolean; vault?: boolean }) => {
     const cwd = process.cwd();
     const rvPath = join(cwd, CONFIG_FILENAME);
     if (!existsSync(rvPath)) {
@@ -185,6 +282,18 @@ program
     delete config.secrets[key];
     writeFileSync(rvPath, JSON.stringify(config, null, 2) + "\n");
     console.log(`Removed ${key} from ${CONFIG_FILENAME}`);
+
+    // Optionally remove from vault
+    if (opts.vault) {
+      const projectName = getProjectName(config, cwd);
+      const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
+      const result = runPsst(["--global", "rm", vaultKey], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      if (result.status === 0) {
+        console.log(`Removed ${vaultKey} from vault`);
+      } else {
+        console.log(`Note: ${vaultKey} was not in vault`);
+      }
+    }
   });
 
 program

@@ -7,32 +7,35 @@ vi.mock("../src/approval.js", () => ({
   isApproved: (...args: unknown[]) => mockIsApproved(...args),
 }));
 
-const { processCommand } = await import("../src/hook.js");
-
 const testConfig: RvConfig = {
+  project: "testproj",
   secrets: {
     OPENAI_API_KEY: { description: "key" },
     STRIPE: { as: "STRIPE_KEY" },
   },
 };
 
-// Mock loadConfig to return testConfig for approved-project tests
+// Mock loadConfig and findConfig for approved-project tests
 vi.mock("../src/config.js", async () => {
   const actual = await vi.importActual<typeof import("../src/config.js")>("../src/config.js");
   return {
     ...actual,
     loadConfig: () => testConfig,
+    findConfig: (dir: string) => dir.includes("approved") ? `${dir}/.rv.json` : null,
+    getProjectName: (config: RvConfig | null, _cwd: string) => config?.project ?? "testproj",
   };
 });
+
+const { processCommand } = await import("../src/hook.js");
 
 describe("hook processCommand", () => {
   beforeEach(() => {
     mockIsApproved.mockReturnValue(true);
   });
 
-  it("wraps command with rv-exec args", () => {
+  it("wraps command with rv-exec args including project", () => {
     const r = processCommand("npm test", "/approved");
-    expect(r.updatedInput?.command).toBe("rv-exec OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'npm test'");
+    expect(r.updatedInput?.command).toBe("rv-exec --project 'testproj' OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'npm test'");
   });
 
   it("blocks psst get", () => {
@@ -81,12 +84,12 @@ describe("hook processCommand", () => {
 
   it("escapes shell metacharacters in wrapped command", () => {
     const r = processCommand("npm install && npm test", "/approved");
-    expect(r.updatedInput?.command).toBe("rv-exec OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'npm install && npm test'");
+    expect(r.updatedInput?.command).toBe("rv-exec --project 'testproj' OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'npm install && npm test'");
   });
 
   it("escapes single quotes in wrapped command", () => {
     const r = processCommand("echo 'hello world'", "/approved");
-    expect(r.updatedInput?.command).toBe("rv-exec OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'echo '\\''hello world'\\'''");
+    expect(r.updatedInput?.command).toBe("rv-exec --project 'testproj' OPENAI_API_KEY STRIPE=STRIPE_KEY -- bash -c 'echo '\\''hello world'\\'''");
   });
 
   it("blocks unapproved project", () => {
