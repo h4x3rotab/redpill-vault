@@ -4,7 +4,7 @@
 
 redpill-vault — secure credential manager for AI tools. Transparent secret injection via psst, with an approval gate so the agent never sees secret values or the master key.
 
-Single global vault design: one master key at `~/.config/rv/master-key`, one psst vault at `~/.psst/`, per-project `.rv.json` selects which keys get injected.
+Single global vault design: one master key at `~/.config/rv/master-key`, one psst vault at `~/.psst/`, per-project `.rv.json` selects which keys get injected. Supports project-scoped credentials with automatic fallback to global keys.
 
 ## Structure
 
@@ -34,7 +34,7 @@ skills/
 ## Development
 
 - `npm run build` — compile TypeScript
-- `npm test` — run vitest unit tests (31 tests)
+- `npm test` — run vitest unit tests (46 tests)
 - `bash tests/integration.sh` — run integration + e2e tests (19 tests, requires psst + claude)
 - `bash tests/plugin-e2e.sh` — plugin artifact validation + rv init (14 tests)
 - `bash tests/plugin-onboarding.sh` — full plugin onboarding flow (16 tests, requires claude CLI)
@@ -45,11 +45,23 @@ skills/
 - **psst requires `--global` for every command** when using the global vault (init, set, list, key injection). Without it, psst looks for a local `.psst/` directory and silently fails.
 - **psst redacts output by default.** Secret values appear as `[REDACTED]` in stdout. Use `--no-mask` only for debugging.
 - **psst init exits non-zero when vault already exists.** The "already exists" message goes to stdout, not stderr. Both streams must be checked.
+- **psst key names must be uppercase with underscores only.** No slashes, dots, hyphens, or lowercase. Project-scoped keys use `PROJECT__KEY` format (double underscore separator). `normalizeProjectName()` converts project names (e.g. `my-app` → `MY_APP`).
 - **`RV_CONFIG_DIR` env var** overrides the default `~/.config/rv/` location. Used by tests to isolate state without faking HOME.
 - **`RV_INSTALL_SOURCE` env var** overrides the npm package name in `setup.sh`. Set to a local path for testing the bootstrap flow.
 - **Don't fake HOME in integration tests** — it breaks claude auth, git config, etc. Use targeted env vars (`RV_CONFIG_DIR`) instead. Restore real HOME for any claude invocations.
 - **Unknown psst subcommands are blocked by default.** Only explicitly safe commands (list, set, rm, init, scan, install-hook, import) pass through the hook.
 - **Plugin hook deduplication.** `rv init` skips wiring into `.claude/settings.json` if the plugin is installed (detected via `claude plugin list`). The plugin's `hooks/hooks.json` handles it instead.
+
+## Project-scoped credentials
+
+Each project can have its own credentials that override global ones. Resolution order: `PROJECT__KEY` → `KEY`.
+
+- **Project name** comes from `.rv.json` `"project"` field, or `basename(cwd)` if not set.
+- **Vault key format:** `PROJECT__KEY` (double underscore, all uppercase). Example: project `my-app` with key `GITHUB_TOKEN` → `MY_APP__GITHUB_TOKEN`.
+- **`rv add KEY`** defaults to project-scoped when in a project. Use `-g` for global. Outside a project, `-g` is required.
+- **`rv list`** shows `[project]`, `[global]`, or `[missing]` source for each key.
+- **Hook passes `--project NAME`** to `rv-exec`, which resolves each key by checking the scoped name first, falling back to global.
+- **psst list output uses bullet points** (`● KEY`). The CLI and rv-exec strip these when parsing vault contents.
 
 ## Claude Code plugin conventions
 
