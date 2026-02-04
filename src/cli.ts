@@ -288,6 +288,51 @@ program
   });
 
 program
+  .command("set <key>")
+  .description("Set a single secret value (reads from stdin)")
+  .option("-g, --global", "Store as global key (not project-scoped)")
+  .action(async (key: string, opts: { global?: boolean }) => {
+    const cwd = process.cwd();
+    const config = loadConfig();
+    const projectName = config ? getProjectName(config, cwd) : null;
+
+    if (!opts.global && !projectName) {
+      console.error(`Not in a project (no ${CONFIG_FILENAME}). Use -g for global, or run: rv init`);
+      process.exit(1);
+    }
+
+    const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
+
+    // Read value from stdin
+    let value = "";
+    for await (const chunk of process.stdin) {
+      value += chunk;
+    }
+    value = value.replace(/\n$/, "");
+
+    if (!value) {
+      console.error("No value provided on stdin");
+      process.exit(1);
+    }
+
+    ensurePsstAuth();
+
+    const result = runPsst(["--global", "set", vaultKey, "--stdin"], {
+      encoding: "utf-8",
+      input: value,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    if (result.status === 0) {
+      console.log(`Set ${vaultKey}`);
+    } else {
+      const stderr = (result.stderr ?? "").trim();
+      console.error(`Failed to set ${vaultKey}: ${stderr || "unknown error"}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command("check")
   .description("Verify all .rv.json keys exist in psst vault")
   .action(() => {

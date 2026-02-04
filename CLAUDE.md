@@ -10,7 +10,7 @@ Single global vault design: one master key at `~/.config/rv/master-key`, one pss
 
 ```
 src/
-  cli.ts        — rv CLI (init, approve, revoke, list, import, check, doctor)
+  cli.ts        — rv CLI (init, approve, revoke, list, import, set, check, doctor)
   hook.ts       — Claude Code PreToolUse hook (approval gate, command rewriting, blocking)
   rv-exec.ts    — wrapper binary that resolves psst auth + execs psst (agent never sees master key)
   approval.ts   — approval store CRUD (~/.config/rv/approved.json)
@@ -63,6 +63,7 @@ Each project can have its own credentials that override global ones. Resolution 
 - **Hook passes `--project NAME`** to `rv-exec`, which resolves each key by checking the scoped name first, falling back to global.
 - **psst list output uses bullet points** (`● KEY`). The CLI and rv-exec strip these when parsing vault contents.
 - **`rv import .env`** reads a `.env` file and stores each key in the vault (project-scoped by default, `-g` for global). Also registers keys in `.rv.json`. Supports `KEY=value`, quoted values, `export` prefix, and comments. Values are piped to psst via stdin and never appear in stdout.
+- **`rv set KEY`** sets a single secret value from stdin (project-scoped by default, `-g` for global). Does not modify `.rv.json`. Blocked from agent — user only.
 
 ## Claude Code plugin conventions
 

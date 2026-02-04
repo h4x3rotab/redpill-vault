@@ -52,6 +52,8 @@ Claude will run `rv init`. You still need to run `rv approve` yourself.
 ```bash
 rv import .env      # import secrets from a .env file into vault + .rv.json
 rv import .env -g   # import as global keys
+rv set KEY          # set a single secret (reads value from stdin)
+rv set KEY -g       # set as global key
 rv list             # list keys with source ([project]/[global]/[missing])
 rv approve          # allow this project to inject its secrets
 rv revoke           # remove approval

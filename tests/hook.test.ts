@@ -78,6 +78,10 @@ describe("hook processCommand", () => {
     expect(processCommand("rv revoke", "/approved").decision).toBe("block");
   });
 
+  it("blocks rv set from agent", () => {
+    expect(processCommand("rv set SOME_KEY", "/approved").decision).toBe("block");
+  });
+
   it("allows rv import from agent", () => {
     expect(processCommand("rv import .env", "/approved").decision).toBeUndefined();
   });

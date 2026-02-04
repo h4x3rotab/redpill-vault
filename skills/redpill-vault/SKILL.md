@@ -56,7 +56,7 @@ To control which keys get injected, edit `.rv.json` directly. Each key in the `s
 If `rv list` shows `[missing]` for a key, tell the user to run one of these in their terminal:
 
 - `rv import .env` — to bulk-import from an env file
-- `psst --global set VAULT_KEY_NAME` — to set a single key manually
+- `rv set KEY_NAME` — to set a single key (reads value from stdin)
 
 ## How it works
 
@@ -91,5 +91,6 @@ The `"project"` field is optional. If omitted, the directory name is used.
 | `rv list -g` | agent or user | Show only global keys in vault |
 | `rv check` | agent or user | Verify all keys exist in vault |
 | `rv doctor` | agent or user | Full health check |
+| `rv set KEY` | **user only** | Set a single secret (reads value from stdin) |
 | `rv approve` | **user only** | Approve this project for injection |
 | `rv revoke` | **user only** | Revoke project approval |
