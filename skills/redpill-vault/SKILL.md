@@ -1,6 +1,6 @@
 ---
 name: redpill-vault
-description: Secure credential manager for AI tools. Secrets are injected transparently into shell commands via a PreToolUse hook — the agent never sees secret values or the master key. Trigger phrases include "add a secret", "inject credentials", "set up vault", "rv init", "rv add", or any secret/credential management request.
+description: Manages all environment variables and credentials for AI tools. API keys, tokens, database URLs, and other secrets are stored in a vault and injected transparently into shell commands via a PreToolUse hook — the agent never sees secret values or the master key. Supports project-scoped and global credentials. Use this skill whenever you need to add, list, configure, or troubleshoot env vars, secrets, or credentials.
 ---
 
 # redpill-vault
