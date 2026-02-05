@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, CONFIG_FILENAME } from "./config.js";
+import { loadConfig, CONFIG_FILENAME, getProjectName, buildScopedKey } from "./config.js";
 import { getMasterKeyPath, isApproved } from "./approval.js";
 import { Vault, openVault, getVaultKeys, VAULT_VERSION } from "./vault/index.js";
 
@@ -59,12 +59,17 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     const config = loadConfig(cwd);
     if (config) {
       const vaultKeys = getVaultKeys({ global: true });
+      const projectName = getProjectName(config, cwd);
       for (const key of Object.keys(config.secrets)) {
-        const found = vaultKeys.has(key);
+        const projectKey = projectName ? buildScopedKey(projectName, key) : null;
+        const hasProjectKey = projectKey && vaultKeys.has(projectKey);
+        const hasGlobalKey = vaultKeys.has(key);
+        const found = hasProjectKey || hasGlobalKey;
+        const source = hasProjectKey ? "project" : hasGlobalKey ? "global" : null;
         checks.push({
           name: `key: ${key}`,
           ok: found,
-          message: found ? "in vault" : "NOT in vault — run: rv set " + key,
+          message: found ? `in vault [${source}]` : "NOT in vault — run: rv set " + key,
         });
       }
     }
@@ -82,13 +87,18 @@ export function checkKeys(cwd: string = process.cwd()): Check[] {
     return [{ name: "vault", ok: false, message: "cannot access vault" }];
   }
 
+  const projectName = getProjectName(config, cwd);
   const checks: Check[] = [];
   for (const key of Object.keys(config.secrets)) {
-    const found = vaultKeys.has(key);
+    const projectKey = projectName ? buildScopedKey(projectName, key) : null;
+    const hasProjectKey = projectKey && vaultKeys.has(projectKey);
+    const hasGlobalKey = vaultKeys.has(key);
+    const found = hasProjectKey || hasGlobalKey;
+    const source = hasProjectKey ? "project" : hasGlobalKey ? "global" : null;
     checks.push({
       name: key,
       ok: found,
-      message: found ? "present in vault" : "MISSING — run: rv set " + key,
+      message: found ? `present in vault [${source}]` : "MISSING — run: rv set " + key,
     });
   }
   return checks;
