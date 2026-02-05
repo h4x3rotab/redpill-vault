@@ -1,13 +1,12 @@
 {
   "name": "redpill-vault",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Secure credential manager for AI tools — transparent secret injection from an encrypted vault",
   "type": "module",
   "bin": {
     "rv": "./dist/cli.js",
     "rv-hook": "./dist/hook.js",
-    "rv-exec": "./dist/rv-exec.js",
-    "psst": "./dist/psst-shim.js"
+    "rv-exec": "./dist/rv-exec.js"
   },
   "scripts": {
     "build": "tsc",
@@ -30,12 +29,13 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.1.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "dependencies": {
-    "@pssst/cli": "^0.3.0",
+    "better-sqlite3": "^12.6.2",
     "commander": "^13.0.0"
   }
 }

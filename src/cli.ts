@@ -3,19 +3,18 @@ import { Command } from "commander";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
-import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILENAME, loadConfig, getProjectName, buildScopedKey, parseEnvFile } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
-import { runPsst } from "./psst.js";
 import { getRvConfigDir, getMasterKeyPath, approveProject, revokeProject, isApproved } from "./approval.js";
+import { Vault, openVault, getVaultKeys, initVault, ensureAuth, VAULT_VERSION } from "./vault/index.js";
 
 const program = new Command();
 
 program
   .name("rv")
   .description("redpill-vault — secure credential manager for AI tools")
-  .version("0.1.7");
+  .version("0.2.0");
 
 function runInit() {
   // 1. Create master key
@@ -32,24 +31,17 @@ function runInit() {
     console.log("Created master key at " + masterKeyPath);
   }
 
-  // 2. Init psst vault
-  const masterKey = readFileSync(masterKeyPath, "utf-8").trim();
-  {
-    const result = runPsst(["init", "--global"], {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PSST_PASSWORD: masterKey },
-    });
-    const stdout = result.stdout ?? "";
-    const stderr = result.stderr ?? "";
-    if (result.status === 0) {
-      console.log("psst vault initialized");
-    } else if (stderr.includes("already exists") || stdout.includes("already exists")) {
-      console.log("psst vault already initialized");
-    } else {
-      console.error("Failed to initialize psst vault. Is psst installed?");
-      process.exit(1);
-    }
+  // 2. Init vault
+  ensureAuth();
+  const result = initVault({ global: true });
+  if (!result.success) {
+    console.error("Failed to initialize vault:", result.error);
+    process.exit(1);
+  }
+  if (result.path && Vault.findVaultPath({ global: true })) {
+    console.log("Vault initialized at " + result.path);
+  } else {
+    console.log("Vault already initialized");
   }
 
   // 3. Create .rv.json if missing
@@ -115,42 +107,6 @@ program
   .description("Alias for init")
   .action(runInit);
 
-/** Ensure psst auth is available (keychain or master key) */
-function ensurePsstAuth(): void {
-  if (process.env.PSST_PASSWORD) return;
-  // Try keychain first
-  const probe = runPsst(["--global", "list"], { stdio: "pipe", timeout: 5000, encoding: "utf-8" });
-  if (probe.status === 0) return;
-  // Fall back to master key
-  const mkPath = getMasterKeyPath();
-  if (existsSync(mkPath)) {
-    const key = readFileSync(mkPath, "utf-8").trim();
-    if (key) process.env.PSST_PASSWORD = key;
-  }
-}
-
-/** Get list of keys in psst vault */
-function getVaultKeys(): Set<string> {
-  try {
-    ensurePsstAuth();
-    const result = runPsst(["--global", "list"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    if (result.status !== 0) return new Set();
-    const keys = new Set<string>();
-    for (const line of (result.stdout ?? "").split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("#")) {
-        // psst list format: "● KEY" or "KEY" — strip bullet point and whitespace
-        const withoutBullet = trimmed.replace(/^[●•]\s*/, "");
-        const key = withoutBullet.split("=")[0].split(/\s+/)[0];
-        if (key && /^[A-Z_][A-Z0-9_]*$/.test(key)) keys.add(key);
-      }
-    }
-    return keys;
-  } catch {
-    return new Set();
-  }
-}
-
 program
   .command("list")
   .description("Show secrets from .rv.json with descriptions and source")
@@ -161,7 +117,7 @@ program
 
     if (opts.global) {
       // Show global keys only (exclude PROJECT__KEY scoped keys)
-      const vaultKeys = getVaultKeys();
+      const vaultKeys = getVaultKeys({ global: true });
       const globalKeys = [...vaultKeys].filter(k => !k.includes("__")).sort();
       if (globalKeys.length === 0) {
         console.log("No global keys in vault.");
@@ -184,7 +140,7 @@ program
     }
 
     const projectName = getProjectName(config, cwd);
-    const vaultKeys = getVaultKeys();
+    const vaultKeys = getVaultKeys({ global: true });
 
     for (const [key, entry] of entries) {
       let line = key;
@@ -215,7 +171,7 @@ program
   .command("import <envfile> [keys...]")
   .description("Import all secrets from a .env file into the vault (or specify keys to import)")
   .option("-g, --global", "Import as global keys (not project-scoped)")
-  .action((envfile: string, filterKeys: string[], opts: { global?: boolean }) => {
+  .action(async (envfile: string, filterKeys: string[], opts: { global?: boolean }) => {
     const cwd = process.cwd();
     const rvPath = join(cwd, CONFIG_FILENAME);
     const envPath = join(cwd, envfile);
@@ -238,11 +194,17 @@ program
 
     const projectName = hasConfig ? getProjectName(config as any, cwd) : null;
 
-    ensurePsstAuth();
+    ensureAuth();
+    const vault = openVault({ global: true });
+    if (!vault) {
+      console.error("Failed to open vault. Run: rv init");
+      process.exit(1);
+    }
 
     const entries = parseEnvFile(readFileSync(envPath, "utf-8"));
     if (entries.size === 0) {
       console.error(`No entries found in ${envfile}`);
+      vault.close();
       process.exit(1);
     }
 
@@ -253,6 +215,7 @@ program
 
     if (keysToImport.length === 0) {
       console.error(`None of the specified keys found in ${envfile}`);
+      vault.close();
       process.exit(1);
     }
 
@@ -260,29 +223,12 @@ program
     for (const [key, value] of keysToImport) {
       const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
 
-      // Store in psst vault via stdin (value never appears in args or stdout)
-      const result = runPsst(["--global", "set", vaultKey, "--stdin"], {
-        encoding: "utf-8",
-        input: value,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      if (result.status === 0) {
-        // Verify the key was actually stored
-        const verify = runPsst(["--global", "list"], {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-        const listed = (verify.stdout ?? "").includes(vaultKey);
-        if (listed) {
-          console.log(`Imported ${key} → ${vaultKey}`);
-          imported++;
-        } else {
-          console.error(`Warning: ${key} → ${vaultKey} reported success but not found in vault`);
-        }
-      } else {
-        const stderr = (result.stderr ?? "").trim();
-        console.error(`Failed to import ${key}: ${stderr || "unknown error"}`);
+      try {
+        await vault.setSecret(vaultKey, value);
+        console.log(`Imported ${key} → ${vaultKey}`);
+        imported++;
+      } catch (err) {
+        console.error(`Failed to import ${key}: ${err instanceof Error ? err.message : "unknown error"}`);
       }
 
       // Register in .rv.json if not already there
@@ -290,6 +236,8 @@ program
         config.secrets[key] = {};
       }
     }
+
+    vault.close();
 
     // Save updated config
     if (hasConfig) {
@@ -333,20 +281,21 @@ program
       process.exit(1);
     }
 
-    ensurePsstAuth();
-
-    const result = runPsst(["--global", "set", vaultKey, "--stdin"], {
-      encoding: "utf-8",
-      input: value,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    if (result.status === 0) {
-      console.log(`Set ${vaultKey}`);
-    } else {
-      const stderr = (result.stderr ?? "").trim();
-      console.error(`Failed to set ${vaultKey}: ${stderr || "unknown error"}`);
+    ensureAuth();
+    const vault = openVault({ global: true });
+    if (!vault) {
+      console.error("Failed to open vault. Run: rv init");
       process.exit(1);
+    }
+
+    try {
+      await vault.setSecret(vaultKey, value);
+      console.log(`Set ${vaultKey}`);
+    } catch (err) {
+      console.error(`Failed to set ${vaultKey}: ${err instanceof Error ? err.message : "unknown error"}`);
+      process.exit(1);
+    } finally {
+      vault.close();
     }
   });
 
@@ -364,35 +313,33 @@ program
       process.exit(1);
     }
 
-    ensurePsstAuth();
+    ensureAuth();
+    const vault = openVault({ global: true });
+    if (!vault) {
+      console.error("Failed to open vault. Run: rv init");
+      process.exit(1);
+    }
 
     let failed = false;
     for (const key of keys) {
       const vaultKey = opts.global ? key : (projectName ? buildScopedKey(projectName, key) : key);
 
-      const result = runPsst(["--global", "rm", vaultKey], {
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      if (result.status === 0) {
+      const removed = vault.removeSecret(vaultKey);
+      if (removed) {
         console.log(`Removed ${vaultKey}`);
       } else {
-        const stderr = (result.stderr ?? "").trim();
-        if (stderr.includes("not found") || (result.stdout ?? "").includes("not found")) {
-          console.error(`Key not found: ${vaultKey}`);
-        } else {
-          console.error(`Failed to remove ${vaultKey}: ${stderr || "unknown error"}`);
-        }
+        console.error(`Key not found: ${vaultKey}`);
         failed = true;
       }
     }
+
+    vault.close();
     if (failed) process.exit(1);
   });
 
 program
   .command("check")
-  .description("Verify all .rv.json keys exist in psst vault")
+  .description("Verify all .rv.json keys exist in vault")
   .action(() => {
     const results = checkKeys();
     let allOk = true;
@@ -425,7 +372,7 @@ program
 
 program
   .command("init")
-  .description("Full project setup: master key, psst vault, .rv.json, and hook wiring")
+  .description("Full project setup: master key, vault, .rv.json, and hook wiring")
   .action(runInit);
 
 program

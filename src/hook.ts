@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { loadConfig, buildPsstArgs, findConfig, getProjectName } from "./config.js";
 import { fileURLToPath } from "node:url";
-import { isApproved } from "./approval.js";
-import { dirname } from "node:path";
+import { isApproved, getRvConfigDir } from "./approval.js";
+import { dirname, join } from "node:path";
+import { appendFileSync, mkdirSync } from "node:fs";
 
 interface HookInput {
   tool_name: string;
@@ -187,6 +188,7 @@ async function main() {
     process.env.CLAUDE_PROJECT_DIR ??
     process.env.PWD;
   const result = processCommand(parsed.tool_input.command, inferredCwd);
+  logCommand(parsed.tool_input.command, result);
 
   if (result.decision === "block") {
     process.stderr.write(result.reason + "\n");
@@ -205,6 +207,20 @@ async function main() {
   }
 
   process.exit(0);
+}
+
+function logCommand(original: string, result: HookResult): void {
+  try {
+    const configDir = getRvConfigDir();
+    mkdirSync(configDir, { recursive: true });
+    const logPath = join(configDir, "hook.log");
+    const ts = new Date().toISOString();
+    const actual = result.updatedInput?.command ?? original;
+    const status = result.decision === "block" ? "BLOCKED" : result.updatedInput ? "WRAPPED" : "PASSTHROUGH";
+    appendFileSync(logPath, `[${ts}] ${status} ${actual}\n`);
+  } catch {
+    // logging is best-effort
+  }
 }
 
 const isDirectRun = fileURLToPath(import.meta.url) === process.argv[1];

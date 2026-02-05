@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-import { runPsst } from "./psst.js";
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { getMasterKeyPath } from "./approval.js";
 import { buildScopedKey } from "./config.js";
+import { Vault, ensureAuth, getVaultKeys, openVault } from "./vault/index.js";
 
 /**
- * rv-exec [--project NAME] [--dotenv PATH] KEY1 KEY2 -- command args...
+ * rv-exec [--project NAME] [--dotenv PATH] [--no-mask] KEY1 KEY2 -- command args...
  *
- * Resolves psst auth (keychain or master-key file), then execs psst.
+ * Resolves vault auth, then runs command with secrets injected.
  * With --project, tries PROJECT__KEY first, falls back to KEY.
  * With --dotenv, writes resolved secrets to a .env file before running
  * the command, and deletes it after.
+ * With --no-mask, disables secret masking in output.
  */
 
 const args = process.argv.slice(2);
@@ -33,10 +34,18 @@ if (dotenvIndex !== -1 && dotenvIndex + 1 < remaining.length) {
   remaining = [...remaining.slice(0, dotenvIndex), ...remaining.slice(dotenvIndex + 2)];
 }
 
+// Parse --no-mask argument
+let noMask = false;
+const noMaskIndex = remaining.indexOf("--no-mask");
+if (noMaskIndex !== -1) {
+  noMask = true;
+  remaining = [...remaining.slice(0, noMaskIndex), ...remaining.slice(noMaskIndex + 1)];
+}
+
 const sepIndex = remaining.indexOf("--");
 
 if (sepIndex === -1 || sepIndex === remaining.length - 1) {
-  process.stderr.write("Usage: rv-exec [--project NAME] [--dotenv PATH] KEY1 [KEY2...] -- command [args...]\n");
+  process.stderr.write("Usage: rv-exec [--project NAME] [--dotenv PATH] [--no-mask] KEY1 [KEY2...] -- command [args...]\n");
   process.exit(1);
 }
 
@@ -48,54 +57,33 @@ if (keys.length === 0) {
   process.exit(1);
 }
 
-// Check if keychain auth works by running `psst list`
-let useKeychain = false;
-try {
-  const probe = runPsst(["--global", "list"], { stdio: "pipe", timeout: 5000, encoding: "utf-8" });
-  if (probe.status === 0) {
-    useKeychain = true;
-  }
-} catch {
-  // keychain not available
-}
-
-// If no keychain, load master key
-if (!useKeychain) {
+// Ensure auth and open vault
+if (!ensureAuth()) {
   if (!existsSync(getMasterKeyPath())) {
     process.stderr.write(
-      `rv-exec: no keychain and no master key found at ${getMasterKeyPath()}\nRun: rv init\n`,
+      `rv-exec: no master key found at ${getMasterKeyPath()}\nRun: rv init\n`,
     );
     process.exit(1);
   }
-  const masterKey = readFileSync(getMasterKeyPath(), "utf-8").trim();
-  if (!masterKey) {
-    process.stderr.write("rv-exec: master key file is empty\nRun: rv init\n");
-    process.exit(1);
-  }
-  process.env.PSST_PASSWORD = masterKey;
+  process.stderr.write("rv-exec: failed to authenticate with vault\nRun: rv init\n");
+  process.exit(1);
+}
+
+const vault = openVault({ global: true });
+if (!vault) {
+  process.stderr.write("rv-exec: failed to open vault\nRun: rv init\n");
+  process.exit(1);
 }
 
 // Get list of keys in vault
-const listResult = runPsst(["--global", "list"], {
-  encoding: "utf-8",
-  stdio: ["pipe", "pipe", "pipe"],
-  env: process.env,
-});
-const vaultKeys = new Set<string>();
-if (listResult.status === 0) {
-  for (const line of (listResult.stdout ?? "").split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed && !trimmed.startsWith("#")) {
-      // psst list format: "● KEY" — strip bullet point and whitespace
-      const withoutBullet = trimmed.replace(/^[●•]\s*/, "");
-      const key = withoutBullet.split("=")[0].split(/\s+/)[0];
-      if (key && /^[A-Z_][A-Z0-9_]*$/.test(key)) vaultKeys.add(key);
-    }
-  }
-}
+const vaultKeys = getVaultKeys({ global: true });
 
 // Resolve keys: project-scoped fallback, then filter missing
-const resolvedKeys: string[] = [];
+interface ResolvedKey {
+  vaultKey: string;  // Key name in vault
+  envName: string;   // Env var name for the command
+}
+const resolvedKeys: ResolvedKey[] = [];
 const missingKeys: string[] = [];
 
 for (const keySpec of keys) {
@@ -106,14 +94,14 @@ for (const keySpec of keys) {
   if (projectName) {
     const projectKey = buildScopedKey(projectName, key);
     if (vaultKeys.has(projectKey)) {
-      resolvedKeys.push(projectKey !== envName ? `${projectKey}=${envName}` : projectKey);
+      resolvedKeys.push({ vaultKey: projectKey, envName });
       continue;
     }
   }
 
   // Fallback to global key
   if (vaultKeys.has(key)) {
-    resolvedKeys.push(alias ? `${key}=${alias}` : key);
+    resolvedKeys.push({ vaultKey: key, envName });
     continue;
   }
 
@@ -126,73 +114,94 @@ if (missingKeys.length > 0) {
   process.stderr.write(`  Fix with: rv import .env  or  rv set KEY_NAME\n`);
 }
 
-// If no keys resolved, run command directly without psst
+// If no keys resolved, run command directly without secrets
 if (resolvedKeys.length === 0) {
+  vault.close();
   if (dotenvPath) {
     // Write empty dotenv file so the command doesn't fail on missing file
     writeFileSync(dotenvPath, "", { mode: 0o600 });
   }
-  try {
-    const result = spawnSync(command[0], command.slice(1), {
-      stdio: "inherit",
-      env: process.env,
-    });
-    process.exit(result.status ?? 1);
-  } finally {
+  const child = spawn(command[0], command.slice(1), {
+    stdio: "inherit",
+    shell: true,
+    env: { ...process.env, PSST_PASSWORD: undefined },
+  });
+  child.on("exit", (code) => {
     if (dotenvPath) {
       try { unlinkSync(dotenvPath); } catch {}
     }
-  }
-}
-
-// Write dotenv file if requested
-if (dotenvPath) {
-  // Collect env var names from resolved keys
-  const envNames = resolvedKeys.map(spec => {
-    const parts = spec.split("=");
-    return parts.length > 1 ? parts[1] : parts[0];
+    process.exit(code ?? 1);
   });
-
-  // Use psst to run a shell command that outputs KEY=VALUE for each env var
-  const printParts = envNames.map(n => `printf '%s=%s\\n' '${n}' "\$${n}"`).join("; ");
-  const dumpResult = runPsst(
-    ["--global", ...resolvedKeys, "--", "sh", "-c", printParts],
-    { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], env: process.env },
-  );
-
-  if (dumpResult.status === 0 && dumpResult.stdout) {
-    writeFileSync(dotenvPath, dumpResult.stdout, { mode: 0o600 });
-  } else {
-    const stderr = (dumpResult.stderr ?? "").trim();
-    process.stderr.write(`rv-exec: failed to generate dotenv file${stderr ? ": " + stderr : ""}\n`);
-    process.exit(1);
-  }
-}
-
-// Exec psst with the resolved keys and command (always use global vault)
-try {
-  const psstArgs = ["--global", ...resolvedKeys, "--", ...command];
-  const result = runPsst(psstArgs, {
-    stdio: ["inherit", "inherit", "pipe"],
-    env: process.env,
-    encoding: "utf-8",
-  });
-
-  if (result.status !== 0) {
-    // Rewrite psst error messages to avoid exposing internals
-    const stderr = (result.stderr ?? "").trim();
-    if (stderr) {
-      const cleaned = stderr
-        .replace(/psst\s+set\s+/g, "rv set ")
-        .replace(/\bpsst\b/g, "rv");
-      process.stderr.write(cleaned + "\n");
+} else {
+  // Get secrets from vault
+  (async () => {
+    const secrets = new Map<string, string>();
+    for (const { vaultKey, envName } of resolvedKeys) {
+      const value = await vault.getSecret(vaultKey);
+      if (value !== null) {
+        secrets.set(envName, value);
+      }
     }
-  }
+    vault.close();
 
-  process.exit(result.status ?? 1);
-} finally {
-  // Clean up dotenv file
-  if (dotenvPath) {
-    try { unlinkSync(dotenvPath); } catch {}
+    // Write dotenv file if requested
+    if (dotenvPath) {
+      const lines = [...secrets.entries()].map(([k, v]) => `${k}=${v}`);
+      writeFileSync(dotenvPath, lines.join("\n") + "\n", { mode: 0o600 });
+    }
+
+    // Build environment with secrets
+    const env = {
+      ...process.env,
+      ...Object.fromEntries(secrets),
+    };
+    // Remove PSST_PASSWORD from child env for safety
+    delete env.PSST_PASSWORD;
+
+    // Execute command
+    const [cmd, ...cmdArgs] = command;
+    const shouldMask = !noMask;
+    const secretValues = shouldMask
+      ? Array.from(secrets.values()).filter((v) => v.length > 0)
+      : [];
+
+    const child = spawn(cmd, cmdArgs, {
+      env,
+      stdio: shouldMask ? ["inherit", "pipe", "pipe"] : "inherit",
+      shell: true,
+    });
+
+    if (shouldMask && child.stdout && child.stderr) {
+      child.stdout.on("data", (data: Buffer) => {
+        process.stdout.write(maskSecrets(data.toString(), secretValues));
+      });
+
+      child.stderr.on("data", (data: Buffer) => {
+        process.stderr.write(maskSecrets(data.toString(), secretValues));
+      });
+    }
+
+    child.on("error", (err) => {
+      process.stderr.write("rv-exec: failed to execute: " + err.message + "\n");
+      if (dotenvPath) {
+        try { unlinkSync(dotenvPath); } catch {}
+      }
+      process.exit(2);
+    });
+
+    child.on("exit", (code) => {
+      if (dotenvPath) {
+        try { unlinkSync(dotenvPath); } catch {}
+      }
+      process.exit(code ?? 0);
+    });
+  })();
+}
+
+function maskSecrets(text: string, secrets: string[]): string {
+  let masked = text;
+  for (const secret of secrets) {
+    masked = masked.split(secret).join("[REDACTED]");
   }
+  return masked;
 }
