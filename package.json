@@ -3,6 +3,14 @@
   "version": "0.2.0",
   "description": "Secure credential manager for AI tools — transparent secret injection from an encrypted vault",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/h4x3rotab/redpill-vault.git"
+  },
+  "homepage": "https://github.com/h4x3rotab/redpill-vault#readme",
+  "bugs": {
+    "url": "https://github.com/h4x3rotab/redpill-vault/issues"
+  },
   "bin": {
     "rv": "./dist/cli.js",
     "rv-hook": "./dist/hook.js",
