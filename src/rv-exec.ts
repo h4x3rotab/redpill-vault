@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { dirname } from "node:path";
 import { getMasterKeyPath } from "./approval.js";
-import { buildScopedKey } from "./config.js";
+import { buildScopedKey, loadConfig, findConfig, getProjectName } from "./config.js";
 import { Vault, ensureAuth, getVaultKeys, openVault } from "./vault/index.js";
 
 /**
@@ -55,6 +56,25 @@ const command = remaining.slice(sepIndex + 1);
 if (keys.length === 0) {
   process.stderr.write("rv-exec: no keys specified\n");
   process.exit(1);
+}
+
+// Auto-detect project name if not provided
+if (!projectName) {
+  let dir = process.cwd();
+  while (true) {
+    if (findConfig(dir)) {
+      try {
+        const config = loadConfig(dir);
+        if (config) {
+          projectName = getProjectName(config, dir);
+          break;
+        }
+      } catch {}
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
 }
 
 // Ensure auth and open vault
