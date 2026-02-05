@@ -123,7 +123,6 @@ if (resolvedKeys.length === 0) {
   }
   const child = spawn(command[0], command.slice(1), {
     stdio: "inherit",
-    shell: true,
     env: { ...process.env, PSST_PASSWORD: undefined },
   });
   child.on("exit", (code) => {
@@ -168,7 +167,6 @@ if (resolvedKeys.length === 0) {
     const child = spawn(cmd, cmdArgs, {
       env,
       stdio: shouldMask ? ["inherit", "pipe", "pipe"] : "inherit",
-      shell: true,
     });
 
     if (shouldMask && child.stdout && child.stderr) {
