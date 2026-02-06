@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, CONFIG_FILENAME, getProjectName, buildScopedKey } from "./config.js";
-import { getMasterKeyPath } from "./approval.js";
+import { getMasterKeyPath, isApproved } from "./approval.js";
 import { Vault, openVault, getVaultKeys, VAULT_VERSION } from "./vault/index.js";
 
 export interface Check {
@@ -39,7 +39,14 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     checks.push({ name: CONFIG_FILENAME, ok: false, message: `${CONFIG_FILENAME} not found — run: rv init` });
   }
 
-  // 5. keys present in vault
+  // 5. project approved
+  if (isApproved(cwd)) {
+    checks.push({ name: "project approved", ok: true, message: "project approved for secret injection" });
+  } else {
+    checks.push({ name: "project approved", ok: false, message: "project not approved — run: rv approve" });
+  }
+
+  // 6. keys present in vault
   if (vaultPath) {
     const config = loadConfig(cwd);
     if (config) {

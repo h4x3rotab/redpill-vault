@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Real-world scenario tests for redpill-vault hook behavior.
+# Real-world scenario tests for redpill-vault rv-exec behavior.
 #
-# All tests run locally via the hook binary (no claude CLI needed).
-# Tests the hook's processCommand output and rv-exec injection.
+# All tests run locally (no claude CLI needed).
+# Tests rv-exec injection and various configurations.
 #
 # Scenarios:
 #   1. Key injection works end-to-end
-#   2. Commands without secrets pass through unmodified
-#   2b. Commands without secret usage still get wrapped when config exists
-#   2c. Commands referencing unapproved keys don't get them injected
+#   2. --all flag injects all secrets from .rv.json
 #   3. Missing vault keys are surfaced
-#   4. Only keys listed in .rv.json are injected (per-repo scoping)
-#   5. Complex bash commands survive wrapping (pipes, &&, for loops, heredocs)
-#   6. Already-wrapped commands aren't double-wrapped
-#   7. Non-Bash tool calls are ignored
+#   4. Per-repo key scoping
+#   5. Complex bash commands survive execution
+#   6. Alias/rename support
+#   7. Project-scoped vs global key resolution
+#   8. --dotenv flag for temp .env file
+#   9. Subdirectory execution finds parent config
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -23,7 +23,6 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 FAKE_STATE="$(mktemp -d)"
 FAKE_PROJECT="$(mktemp -d)"
 
-REAL_HOME="$HOME"
 export HOME="$FAKE_STATE/home"
 mkdir -p "$HOME"
 export RV_CONFIG_DIR="$FAKE_STATE/rv"
@@ -37,40 +36,25 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 cleanup() { rm -rf "$FAKE_STATE" "$FAKE_PROJECT"; }
 trap cleanup EXIT
 
-# Helper: pipe a Bash command through the hook, return JSON output
-hook() {
-  local cmd="$1"
-  local cwd="${2:-$FAKE_PROJECT}"
-  local input="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(echo "$cmd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().rstrip()))')},\"cwd\":\"$cwd\"}"
-  echo "$input" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null || true
-}
-
-# Helper: extract the rewritten command from hook JSON output
-hook_cmd() {
-  local output
-  output=$(hook "$1" "${2:-}")
-  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["hookSpecificOutput"]["updatedInput"]["command"])' 2>/dev/null || echo ""
-}
-
-# Helper: check hook blocks (exit code 2)
-hook_blocks() {
-  local cmd="$1"
-  local cwd="${2:-$FAKE_PROJECT}"
-  local input="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":$(echo "$cmd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().rstrip()))')},\"cwd\":\"$cwd\"}"
-  echo "$input" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null
-  return $?
-}
-
 echo "=== redpill-vault scenario tests ==="
 
 # ── Bootstrap ──────────────────────────────────────────────────────────
 cd "$FAKE_PROJECT"
 node "$PROJECT_DIR/dist/cli.js" init >/dev/null 2>&1
 MASTER_KEY=$(cat "$RV_CONFIG_DIR/master-key" | tr -d '\n')
+export PSST_PASSWORD="$MASTER_KEY"
 
-# Store two secrets in vault
-echo "sk-test-openai-key-1234" | PSST_PASSWORD="$MASTER_KEY" psst --global set OPENAI_API_KEY --stdin >/dev/null 2>&1
-echo "sk_test_stripe_5678"     | PSST_PASSWORD="$MASTER_KEY" psst --global set STRIPE_KEY --stdin >/dev/null 2>&1
+# Import secrets via rv
+cat > "$FAKE_PROJECT/.env" <<'EOF'
+OPENAI_API_KEY=sk-test-openai-key-1234
+STRIPE_KEY=sk_test_stripe_5678
+EOF
+
+# Import as project-scoped
+node "$PROJECT_DIR/dist/cli.js" import .env >/dev/null 2>&1
+
+# Also set a global key
+echo "global-db-password" | node "$PROJECT_DIR/dist/cli.js" set DATABASE_URL -g >/dev/null 2>&1
 
 # Configure project with only OPENAI_API_KEY
 cat > "$FAKE_PROJECT/.rv.json" <<'EOF'
@@ -81,92 +65,49 @@ cat > "$FAKE_PROJECT/.rv.json" <<'EOF'
 }
 EOF
 
+# Approve the project
 node "$PROJECT_DIR/dist/cli.js" approve >/dev/null 2>&1
 
 # ── 1. Key injection works ─────────────────────────────────────────────
 echo ""
 echo "--- 1. Key injection ---"
 
-# Hook should wrap with rv-exec OPENAI_API_KEY
-WRAPPED=$(hook_cmd "curl -H 'Authorization: Bearer \$OPENAI_API_KEY' https://api.openai.com/v1/models")
-if echo "$WRAPPED" | grep -q "rv-exec OPENAI_API_KEY -- bash -c"; then
-  pass "hook wraps curl command with OPENAI_API_KEY"
-else
-  fail "expected rv-exec wrapping, got: $WRAPPED"
-fi
-
-# rv-exec actually injects the key as env var
-OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY -- printenv OPENAI_API_KEY 2>&1)
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY -- printenv OPENAI_API_KEY 2>&1)
 if [ -n "$OUTPUT" ]; then
   pass "rv-exec injects OPENAI_API_KEY (got: ${OUTPUT:0:20}...)"
 else
   fail "rv-exec did not inject OPENAI_API_KEY"
 fi
 
-# ── 2. No-secret commands pass through unmodified ──────────────────────
+# ── 2. --all flag injects all keys from .rv.json ───────────────────────
 echo ""
-echo "--- 2. No-secret passthrough ---"
+echo "--- 2. --all flag ---"
 
-# Create a project with empty secrets
-CLEAN_PROJECT="$(mktemp -d)"
-cat > "$CLEAN_PROJECT/.rv.json" <<'EOF'
-{ "secrets": {} }
+# Add second key to config
+cat > "$FAKE_PROJECT/.rv.json" <<'EOF'
+{
+  "secrets": {
+    "OPENAI_API_KEY": { "description": "OpenAI key" },
+    "STRIPE_KEY": { "description": "Stripe key" }
+  }
+}
 EOF
-(cd "$CLEAN_PROJECT" && node "$PROJECT_DIR/dist/cli.js" approve >/dev/null 2>&1)
 
-OUTPUT=$(hook "echo hello" "$CLEAN_PROJECT")
-if [ -z "$OUTPUT" ]; then
-  pass "empty-secrets project: command passes through unmodified"
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv OPENAI_API_KEY 2>&1)
+if [ -n "$OUTPUT" ]; then
+  pass "--all injects OPENAI_API_KEY"
 else
-  fail "empty-secrets project: unexpected hook output: $OUTPUT"
+  fail "--all failed to inject OPENAI_API_KEY"
 fi
 
-# Project with no .rv.json at all
-NO_RV_PROJECT="$(mktemp -d)"
-(cd "$NO_RV_PROJECT" && node "$PROJECT_DIR/dist/cli.js" approve >/dev/null 2>&1)
-OUTPUT=$(hook "ls -la" "$NO_RV_PROJECT")
-if [ -z "$OUTPUT" ]; then
-  pass "no .rv.json: command passes through unmodified"
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv STRIPE_KEY 2>&1)
+if [ -n "$OUTPUT" ]; then
+  pass "--all injects STRIPE_KEY"
 else
-  fail "no .rv.json: unexpected hook output: $OUTPUT"
+  fail "--all failed to inject STRIPE_KEY"
 fi
 
-rm -rf "$CLEAN_PROJECT" "$NO_RV_PROJECT"
-
-# ── 2b. Commands without secret usage still get wrapped ────────────────
-echo ""
-echo "--- 2b. No-secret usage but config exists ---"
-
-# With secrets configured, hook wraps even if command doesn't reference them.
-WRAPPED=$(hook_cmd "echo hello")
-if echo "$WRAPPED" | grep -q "rv-exec" && echo "$WRAPPED" | grep -q "OPENAI_API_KEY"; then
-  pass "command without secret usage is still wrapped (expected pollution)"
-else
-  fail "expected wrapping despite no secret usage: $WRAPPED"
-fi
-
-# ── 2c. Command needs key not approved/injected ─────────────────────────
-echo ""
-echo "--- 2c. Command needs unapproved key ---"
-
-# Command references STRIPE_KEY, but .rv.json only allows OPENAI_API_KEY.
-WRAPPED=$(hook_cmd "echo \$STRIPE_KEY")
-KEYS=$(echo "$WRAPPED" | sed -E "s/^rv-exec (.*) -- .*/\\1/")
-if [ "$KEYS" = "OPENAI_API_KEY" ]; then
-  pass "hook only injects approved keys even if command references others"
-else
-  fail "hook injected unexpected keys: $WRAPPED"
-fi
-
-# Running the command through rv-exec should not populate STRIPE_KEY.
-EXEC_OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY -- printenv STRIPE_KEY 2>&1 || true)
-if echo "$EXEC_OUTPUT" | grep -q "STRIPE_KEY="; then
-  fail "unexpected STRIPE_KEY value injected: $EXEC_OUTPUT"
-else
-  pass "unapproved key remains unset at runtime"
-fi
-
-# ── 3. Missing vault key surfaced by rv-exec ───────────────────────────
+# ── 3. Missing vault keys are surfaced ─────────────────────────────────
 echo ""
 echo "--- 3. Missing vault key ---"
 
@@ -180,31 +121,17 @@ cat > "$FAKE_PROJECT/.rv.json" <<'EOF'
 }
 EOF
 
-# Hook should still wrap with both keys
-WRAPPED=$(hook_cmd "echo test")
-if echo "$WRAPPED" | grep -q "OPENAI_API_KEY" && echo "$WRAPPED" | grep -q "NONEXISTENT_KEY"; then
-  pass "hook includes both keys (existing and missing)"
-else
-  fail "hook didn't include both keys: $WRAPPED"
-fi
-
-# rv-exec with missing key — psst should error or skip
-EXEC_OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" NONEXISTENT_KEY -- echo ok 2>&1) || true
-if echo "$EXEC_OUTPUT" | grep -qi "missing secrets\|no secret\|not found\|unknown"; then
+# rv-exec with missing key should report it
+EXEC_OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- echo ok 2>&1) || true
+if echo "$EXEC_OUTPUT" | grep -qi "missing secrets\|NONEXISTENT_KEY"; then
   pass "rv-exec surfaces missing key error"
 else
-  # psst might still run the command but not inject — check env var is empty
-  EXEC_OUTPUT2=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" NONEXISTENT_KEY -- printenv NONEXISTENT_KEY 2>&1) || true
-  if echo "$EXEC_OUTPUT2" | grep -q "NONEXISTENT_KEY="; then
-    fail "rv-exec: missing key unexpectedly set: $EXEC_OUTPUT2"
-  else
-    pass "rv-exec: missing key results in no env var"
-  fi
+  fail "rv-exec didn't report missing key: $EXEC_OUTPUT"
 fi
 
 # rv check should report the missing key
-CHECK_OUTPUT=$(cd "$FAKE_PROJECT" && PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/cli.js" check 2>&1) || true
-if echo "$CHECK_OUTPUT" | grep -q "NONEXISTENT_KEY" && echo "$CHECK_OUTPUT" | grep -qi "MISSING\|NOT"; then
+CHECK_OUTPUT=$(cd "$FAKE_PROJECT" && node "$PROJECT_DIR/dist/cli.js" check 2>&1) || true
+if echo "$CHECK_OUTPUT" | grep -q "NONEXISTENT_KEY" && echo "$CHECK_OUTPUT" | grep -qi "MISSING"; then
   pass "rv check reports missing key"
 else
   fail "rv check didn't flag missing key: $CHECK_OUTPUT"
@@ -223,22 +150,17 @@ EOF
 echo ""
 echo "--- 4. Per-repo key scoping ---"
 
-# STRIPE_KEY is in vault but NOT in .rv.json — should not be injected
-WRAPPED=$(hook_cmd "echo test")
-if echo "$WRAPPED" | grep -q "STRIPE_KEY"; then
+# STRIPE_KEY is in vault but NOT in .rv.json — should not be injected with --all
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv STRIPE_KEY 2>&1) || true
+if echo "$OUTPUT" | grep -q "sk_test_stripe"; then
   fail "STRIPE_KEY injected despite not being in .rv.json"
 else
   pass "STRIPE_KEY not injected (not in .rv.json)"
 fi
 
-if echo "$WRAPPED" | grep -q "OPENAI_API_KEY"; then
-  pass "OPENAI_API_KEY injected (in .rv.json)"
-else
-  fail "OPENAI_API_KEY not injected"
-fi
-
 # Different project with only STRIPE_KEY
 STRIPE_PROJECT="$(mktemp -d)"
+cd "$STRIPE_PROJECT"
 cat > "$STRIPE_PROJECT/.rv.json" <<'EOF'
 {
   "secrets": {
@@ -246,88 +168,45 @@ cat > "$STRIPE_PROJECT/.rv.json" <<'EOF'
   }
 }
 EOF
-(cd "$STRIPE_PROJECT" && node "$PROJECT_DIR/dist/cli.js" approve >/dev/null 2>&1)
 
-WRAPPED2=$(hook_cmd "echo test" "$STRIPE_PROJECT")
-if echo "$WRAPPED2" | grep -q "STRIPE_KEY" && ! echo "$WRAPPED2" | grep -q "OPENAI_API_KEY"; then
-  pass "stripe project only injects STRIPE_KEY"
+# Store project-scoped key for this project
+PROJ_NAME=$(basename "$STRIPE_PROJECT" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+echo "sk_test_stripe_5678" | node "$PROJECT_DIR/dist/cli.js" set STRIPE_KEY >/dev/null 2>&1
+
+# Approve the stripe project
+node "$PROJECT_DIR/dist/cli.js" approve >/dev/null 2>&1
+
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv STRIPE_KEY 2>&1) || true
+if [ -n "$OUTPUT" ]; then
+  pass "stripe project injects STRIPE_KEY"
 else
-  fail "stripe project key scoping wrong: $WRAPPED2"
+  fail "stripe project failed to inject STRIPE_KEY"
 fi
 rm -rf "$STRIPE_PROJECT"
+cd "$FAKE_PROJECT"
 
-# ── 5. Complex bash commands survive wrapping ──────────────────────────
+# ── 5. Complex bash commands survive execution ──────────────────────────
 echo ""
 echo "--- 5. Complex commands ---"
 
 # Multi-statement with &&
-WRAPPED=$(hook_cmd "npm install && npm test")
-if echo "$WRAPPED" | grep -q "bash -c 'npm install && npm test'"; then
-  pass "multi-statement (&&) preserved"
-else
-  fail "multi-statement broken: $WRAPPED"
-fi
-
-# Pipe chain
-WRAPPED=$(hook_cmd "cat file.txt | grep error | wc -l")
-if echo "$WRAPPED" | grep -q "bash -c 'cat file.txt | grep error | wc -l'"; then
-  pass "pipe chain preserved"
-else
-  fail "pipe chain broken: $WRAPPED"
-fi
-
-# For loop
-WRAPPED=$(hook_cmd 'for i in 1 2 3; do echo $i; done')
-if echo "$WRAPPED" | grep -q "bash -c 'for i in 1 2 3"; then
-  pass "for loop preserved"
-else
-  fail "for loop broken: $WRAPPED"
-fi
-
-# Command with single quotes (the tricky one)
-WRAPPED=$(hook_cmd "echo 'hello world'")
-if echo "$WRAPPED" | grep -q "bash -c 'echo"; then
-  pass "single-quoted string preserved"
-else
-  fail "single-quoted string broken: $WRAPPED"
-fi
-
-# Subshell
-WRAPPED=$(hook_cmd 'echo $(date +%Y)')
-if echo "$WRAPPED" | grep -q 'bash -c'; then
-  pass "subshell preserved in wrapping"
-else
-  fail "subshell broken: $WRAPPED"
-fi
-
-# Heredoc-style
-WRAPPED=$(hook_cmd 'python3 <<EOF
-print("hello")
-EOF')
-if echo "$WRAPPED" | grep -q "bash -c"; then
-  pass "heredoc preserved in wrapping"
-else
-  fail "heredoc broken: $WRAPPED"
-fi
-
-# Actually execute a complex command through rv-exec to prove it works
-EXEC_OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY -- echo one '&&' echo two '&&' echo three 2>&1)
+EXEC_OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- bash -c 'echo one && echo two && echo three' 2>&1)
 if echo "$EXEC_OUTPUT" | grep -q "one" && echo "$EXEC_OUTPUT" | grep -q "two" && echo "$EXEC_OUTPUT" | grep -q "three"; then
   pass "rv-exec runs multi-statement command correctly"
 else
   fail "rv-exec multi-statement failed: $EXEC_OUTPUT"
 fi
 
-# Execute with pipes
-EXEC_OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY -- seq 3 '|' wc -l 2>&1)
+# Pipe chain
+EXEC_OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- bash -c 'seq 3 | wc -l' 2>&1)
 if echo "$EXEC_OUTPUT" | grep -q "3"; then
   pass "rv-exec runs piped command correctly"
 else
   fail "rv-exec pipe failed: $EXEC_OUTPUT"
 fi
 
-# Execute for loop
-EXEC_OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY -- 'for' 'i' 'in' 'x' 'y' 'z' ';' 'do' 'echo' '$i' ';' 'done' 2>&1)
+# For loop
+EXEC_OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- bash -c 'for i in x y z; do echo $i; done' 2>&1)
 if echo "$EXEC_OUTPUT" | grep -q "x" && echo "$EXEC_OUTPUT" | grep -q "y" && echo "$EXEC_OUTPUT" | grep -q "z"; then
   pass "rv-exec runs for loop correctly"
 else
@@ -335,109 +214,118 @@ else
 fi
 
 # Injected key available inside complex command
-EXEC_OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY -- 'if' '[' '-n' '$OPENAI_API_KEY' ']' ';' 'then' 'echo' 'key_present' ';' 'fi' 2>&1)
+EXEC_OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- bash -c 'if [ -n "$OPENAI_API_KEY" ]; then echo key_present; fi' 2>&1)
 if echo "$EXEC_OUTPUT" | grep -q "key_present"; then
   pass "injected key available inside complex command"
 else
   fail "injected key not available: $EXEC_OUTPUT"
 fi
 
-# ── 6. No double-wrapping ─────────────────────────────────────────────
+# ── 6. Alias/rename support ───────────────────────────────────────────
 echo ""
-echo "--- 6. No double-wrapping ---"
+echo "--- 6. Alias support ---"
 
-OUTPUT=$(hook "rv-exec OPENAI_API_KEY -- bash -c 'echo hi'")
-if [ -z "$OUTPUT" ]; then
-  pass "already-wrapped command passes through (no double wrap)"
-else
-  fail "double-wrapped: $OUTPUT"
-fi
-
-# ── 7. Non-Bash tool calls ignored ────────────────────────────────────
-echo ""
-echo "--- 7. Non-Bash tool calls ---"
-
-INPUT='{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"},"cwd":"'"$FAKE_PROJECT"'"}'
-OUTPUT=$(echo "$INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null || true)
-if [ -z "$OUTPUT" ]; then
-  pass "Read tool call ignored by hook"
-else
-  fail "hook processed non-Bash tool: $OUTPUT"
-fi
-
-INPUT='{"tool_name":"Write","tool_input":{"file_path":"/tmp/x","content":"y"},"cwd":"'"$FAKE_PROJECT"'"}'
-OUTPUT=$(echo "$INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null || true)
-if [ -z "$OUTPUT" ]; then
-  pass "Write tool call ignored by hook"
-else
-  fail "hook processed non-Bash tool: $OUTPUT"
-fi
-
-# ── 8. Alias/rename support ───────────────────────────────────────────
-echo ""
-echo "--- 8. Alias support ---"
-
-cat > "$FAKE_PROJECT/.rv.json" <<'EOF'
-{
-  "secrets": {
-    "OPENAI_API_KEY": { "description": "OpenAI key", "as": "MY_KEY" }
-  }
-}
-EOF
-
-WRAPPED=$(hook_cmd "echo test")
-if echo "$WRAPPED" | grep -q "OPENAI_API_KEY=MY_KEY"; then
-  pass "alias renames key in rv-exec args"
-else
-  fail "alias not applied: $WRAPPED"
-fi
-
-# Verify the alias works in rv-exec
-EXEC_OUTPUT=$(PSST_PASSWORD="$MASTER_KEY" node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY=MY_KEY -- printenv MY_KEY 2>&1 || true)
+# Test KEY=ALIAS syntax
+EXEC_OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" OPENAI_API_KEY=MY_KEY -- printenv MY_KEY 2>&1) || true
 if [ -n "$EXEC_OUTPUT" ]; then
   pass "rv-exec injects aliased key as MY_KEY"
 else
   fail "rv-exec alias injection failed"
 fi
 
-# Restore config
+# ── 7. Project-scoped vs global key resolution ─────────────────────────
+echo ""
+echo "--- 7. Project vs global resolution ---"
+
+# DATABASE_URL was set as global; project doesn't have it scoped
 cat > "$FAKE_PROJECT/.rv.json" <<'EOF'
 {
   "secrets": {
-    "OPENAI_API_KEY": { "description": "OpenAI API key" }
+    "OPENAI_API_KEY": { "description": "OpenAI key" },
+    "DATABASE_URL": { "description": "Database connection" }
   }
 }
 EOF
 
-# ── 9. Unapproved project blocks everything ───────────────────────────
+# rv list should show DATABASE_URL as [global]
+LIST_OUTPUT=$(node "$PROJECT_DIR/dist/cli.js" list 2>&1)
+if echo "$LIST_OUTPUT" | grep -q "DATABASE_URL.*\[global\]"; then
+  pass "rv list shows DATABASE_URL as [global]"
+else
+  fail "rv list doesn't show DATABASE_URL as global: $LIST_OUTPUT"
+fi
+
+# rv-exec should resolve the global key
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv DATABASE_URL 2>&1)
+if [ -n "$OUTPUT" ]; then
+  pass "rv-exec resolves global DATABASE_URL"
+else
+  fail "rv-exec failed to resolve global DATABASE_URL"
+fi
+
+# ── 8. --dotenv flag for temp .env file ────────────────────────────────
 echo ""
-echo "--- 9. Unapproved project ---"
+echo "--- 8. --dotenv flag ---"
 
-UNAPPROVED="$(mktemp -d)"
-cat > "$UNAPPROVED/.rv.json" <<'EOF'
-{
-  "secrets": {
-    "OPENAI_API_KEY": { "description": "OpenAI key" }
-  }
-}
-EOF
-
-if hook_blocks "echo hello" "$UNAPPROVED"; then
-  fail "unapproved project should block"
+# Create a script that reads from .env file
+DOTENV_OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all --dotenv .env.test -- cat .env.test 2>&1) || true
+if echo "$DOTENV_OUTPUT" | grep -q "OPENAI_API_KEY="; then
+  pass "--dotenv writes secrets to temp file"
 else
-  pass "unapproved project blocks commands"
+  fail "--dotenv failed: $DOTENV_OUTPUT"
 fi
 
-# rv commands still pass through even without approval
-OUTPUT=$(hook "rv list" "$UNAPPROVED")
-EXIT=$?
-if [ $EXIT -eq 0 ]; then
-  pass "rv list passes through without approval"
+# Temp file should be deleted
+if [ ! -f "$FAKE_PROJECT/.env.test" ]; then
+  pass "--dotenv cleans up temp file"
 else
-  fail "rv list blocked on unapproved project"
+  fail "--dotenv left temp file behind"
+  rm -f "$FAKE_PROJECT/.env.test"
 fi
 
-rm -rf "$UNAPPROVED"
+# ── 9. Subdirectory execution finds parent config ──────────────────────
+echo ""
+echo "--- 9. Subdirectory execution ---"
+
+mkdir -p "$FAKE_PROJECT/subdir/nested"
+cd "$FAKE_PROJECT/subdir/nested"
+
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv OPENAI_API_KEY 2>&1)
+if [ -n "$OUTPUT" ]; then
+  pass "rv-exec from subdirectory finds parent .rv.json"
+else
+  fail "rv-exec from subdirectory failed: $OUTPUT"
+fi
+
+# Project name should be auto-detected
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv DATABASE_URL 2>&1)
+if [ -n "$OUTPUT" ]; then
+  pass "rv-exec from subdirectory resolves project correctly"
+else
+  fail "rv-exec subdirectory project resolution failed"
+fi
+
+cd "$FAKE_PROJECT"
+
+# ── 10. Secret masking ─────────────────────────────────────────────────
+echo ""
+echo "--- 10. Secret masking ---"
+
+# By default, secrets should be masked in output
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- bash -c 'echo $OPENAI_API_KEY' 2>&1)
+if echo "$OUTPUT" | grep -q "\[REDACTED\]"; then
+  pass "secrets are masked by default"
+else
+  fail "secrets not masked: $OUTPUT"
+fi
+
+# With --no-mask, secrets should appear
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all --no-mask -- bash -c 'echo $OPENAI_API_KEY' 2>&1)
+if echo "$OUTPUT" | grep -q "sk-test-openai"; then
+  pass "--no-mask disables masking"
+else
+  fail "--no-mask didn't disable masking: $OUTPUT"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────
 echo ""

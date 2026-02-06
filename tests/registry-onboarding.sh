@@ -7,10 +7,8 @@ set -euo pipefail
 #   1. Uninstall rv (clean slate)
 #   2. Install plugin via marketplace (from local repo — plugin files only)
 #   3. Ask Claude to set up redpill-vault — it installs from npm registry
-#   4. Hook blocks because project is not approved
-#   5. User runs rv approve
-#   6. Approved project: command passes through
-#   7. Clean uninstall
+#   4. Test rv-exec --all functionality
+#   5. Clean uninstall
 #
 # Requires: claude CLI authenticated, redpill-vault published to npm
 
@@ -36,15 +34,17 @@ cleanup() {
 trap cleanup EXIT
 
 export RV_CONFIG_DIR="$FAKE_STATE/rv"
+export HOME="$FAKE_STATE/home"
+mkdir -p "$HOME"
 
 # ── 0. Ensure rv is NOT installed ────────────────────────────────────
 echo "=== Ensure rv not installed ==="
 npm rm -g redpill-vault 2>/dev/null || true
 
-if command -v rv-hook &>/dev/null; then
-  fail "rv-hook still on PATH after uninstall"
+if command -v rv &>/dev/null; then
+  echo "  Note: rv found on PATH (will be reinstalled)"
 else
-  pass "rv-hook not on PATH (clean slate)"
+  pass "rv not on PATH (clean slate)"
 fi
 
 # ── 1. Plugin install ────────────────────────────────────────────────
@@ -83,10 +83,10 @@ else
   fail "rv not on PATH after agent setup"
 fi
 
-if command -v rv-hook &>/dev/null; then
-  pass "Claude installed rv-hook"
+if command -v rv-exec &>/dev/null; then
+  pass "Claude installed rv-exec"
 else
-  fail "rv-hook not on PATH after agent setup"
+  fail "rv-exec not on PATH after agent setup"
 fi
 
 if [ -f .rv.json ]; then
@@ -95,54 +95,42 @@ else
   fail ".rv.json missing — Claude did not run rv init"
 fi
 
-# ── 3. Hook blocks unapproved project ────────────────────────────────
-echo ""
-echo "=== Hook blocks unapproved project ==="
-# Add a test key to .rv.json so the hook has secrets to check
-python3 -c "
-import json
-with open('.rv.json') as f: cfg = json.load(f)
-cfg['secrets']['TEST_KEY'] = {'description': 'test secret'}
-with open('.rv.json', 'w') as f: json.dump(cfg, f, indent=2)
-"
-
-hook_output=$(claude -p "Run this exact bash command: echo hello" \
-  --allowedTools "Bash" \
-  2>&1 || true)
-
-echo "$hook_output"
-
-if echo "$hook_output" | grep -qi "not approved\|rv approve\|blocked"; then
-  pass "hook blocks unapproved project"
+if [ -f "$RV_CONFIG_DIR/master-key" ]; then
+  pass "master-key created"
 else
-  fail "hook did not block unapproved project"
+  fail "master-key missing"
 fi
 
-# ── 4. User runs rv approve ──────────────────────────────────────────
+# ── 3. Test rv-exec with secrets ─────────────────────────────────────
 echo ""
-echo "=== User runs rv approve ==="
+echo "=== rv-exec with secrets ==="
+
+# Import a test secret
+echo "TEST_SECRET=registry_test_value" > .env
+rv import .env 2>&1
+
+# Approve the project (required for rv-exec to work)
 rv approve 2>&1
-# Remove test key from .rv.json
-python3 -c "
-import json
-with open('.rv.json') as f: cfg = json.load(f)
-cfg['secrets'].pop('TEST_KEY', None)
-with open('.rv.json', 'w') as f: json.dump(cfg, f, indent=2)
-"
+[ $? -eq 0 ] && pass "rv approve succeeded" || fail "rv approve failed"
 
-approve_output=$(claude -p "Run this exact bash command: echo rv-plugin-test-ok" \
-  --allowedTools "Bash" \
-  2>&1 || true)
-
-echo "$approve_output"
-
-if echo "$approve_output" | grep -qi "rv-plugin-test-ok"; then
-  pass "approved project: command passes through"
+# Verify import
+list_output=$(rv list 2>&1)
+echo "$list_output"
+if echo "$list_output" | grep -q "TEST_SECRET"; then
+  pass "rv import added TEST_SECRET"
 else
-  fail "approved project: command did not run"
+  fail "TEST_SECRET not in rv list"
 fi
 
-# ── 5. Clean uninstall ───────────────────────────────────────────────
+# Test rv-exec
+exec_output=$(rv-exec --all -- printenv TEST_SECRET 2>&1) || true
+if [ -n "$exec_output" ]; then
+  pass "rv-exec --all injects secret"
+else
+  fail "rv-exec --all failed to inject secret"
+fi
+
+# ── 4. Clean uninstall ───────────────────────────────────────────────
 echo ""
 echo "=== Clean uninstall ==="
 claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" 2>&1 \

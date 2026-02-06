@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { CONFIG_FILENAME, loadConfig, getProjectName, buildScopedKey, parseEnvFile } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
-import { getRvConfigDir, getMasterKeyPath } from "./approval.js";
+import { getRvConfigDir, getMasterKeyPath, isApproved, approveProject, revokeProject } from "./approval.js";
 import { Vault, openVault, getVaultKeys, initVault, ensureAuth, VAULT_VERSION } from "./vault/index.js";
 
 const program = new Command();
@@ -57,6 +57,7 @@ function runInit() {
   console.log("\nSetup complete. Next steps:");
   console.log("  rv import .env   — import secrets from a .env file");
   console.log("  Edit .rv.json    — choose which keys to inject");
+  console.log("  rv approve       — approve this project for secret injection");
   console.log("  rv-exec --all -- <command>  — run command with secrets");
 }
 
@@ -326,6 +327,34 @@ program
       console.log("\nSome checks failed.");
       process.exit(1);
     }
+  });
+
+program
+  .command("approve")
+  .description("Approve this project for secret injection (user only)")
+  .action(() => {
+    const cwd = process.cwd();
+    if (isApproved(cwd)) {
+      console.log("Project already approved.");
+      return;
+    }
+    approveProject(cwd);
+    console.log("Project approved for secret injection.");
+    console.log("  rv-exec will now inject secrets for this project.");
+  });
+
+program
+  .command("revoke")
+  .description("Revoke approval for this project (user only)")
+  .action(() => {
+    const cwd = process.cwd();
+    if (!isApproved(cwd)) {
+      console.log("Project is not approved.");
+      return;
+    }
+    revokeProject(cwd);
+    console.log("Project approval revoked.");
+    console.log("  rv-exec will no longer inject secrets for this project.");
   });
 
 program

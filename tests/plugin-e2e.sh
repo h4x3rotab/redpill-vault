@@ -25,8 +25,14 @@ trap cleanup EXIT
 
 FAKE_STATE="$(mktemp -d)"
 FAKE_PROJECT="$(mktemp -d)"
+export HOME="$FAKE_STATE/home"
+mkdir -p "$HOME"
 export RV_CONFIG_DIR="$FAKE_STATE/rv"
 export PATH="$PROJECT_DIR/dist:$PROJECT_DIR/node_modules/.bin:$PATH"
+
+# Use node directly to ensure we test the built version
+rv() { node "$PROJECT_DIR/dist/cli.js" "$@"; }
+rv-exec() { node "$PROJECT_DIR/dist/rv-exec.js" "$@"; }
 
 # ── Build & unit tests ───────────────────────────────────────────────
 echo "=== Build & unit tests ==="
@@ -37,8 +43,6 @@ npm test --prefix "$PROJECT_DIR" >/dev/null 2>&1 && pass "unit tests" || fail "u
 echo "=== Plugin artifacts ==="
 python3 -m json.tool "$PROJECT_DIR/.claude-plugin/marketplace.json" >/dev/null 2>&1 \
   && pass "marketplace.json valid" || fail "marketplace.json invalid"
-python3 -m json.tool "$PROJECT_DIR/hooks/hooks.json" >/dev/null 2>&1 \
-  && pass "hooks.json valid" || fail "hooks.json invalid"
 bash -n "$PROJECT_DIR/skills/redpill-vault/setup.sh" \
   && pass "setup.sh syntax" || fail "setup.sh syntax"
 test -x "$PROJECT_DIR/skills/redpill-vault/setup.sh" \
@@ -55,20 +59,35 @@ rv init 2>&1
 
 test -f "$RV_CONFIG_DIR/master-key" \
   && pass "master key created" || fail "master key missing"
+test -f "$HOME/.psst/vault.db" \
+  && pass "vault.db created" || fail "vault.db missing"
 test -f .rv.json \
   && pass ".rv.json created" || fail ".rv.json missing"
-test -f .claude/settings.json \
-  && pass "settings.json created" || fail "settings.json missing"
-grep -q rv-hook .claude/settings.json \
-  && pass "rv-hook wired in settings" || fail "rv-hook not in settings"
 
 # ── rv init (idempotent re-run) ──────────────────────────────────────
 echo "=== rv init (idempotent) ==="
 output=$(rv init 2>&1)
 echo "$output" | grep -q "already exists" \
   && pass "idempotent: skips existing" || fail "idempotent: unexpected output"
-echo "$output" | grep -q "already configured" \
-  && pass "idempotent: hook already configured" || fail "idempotent: hook re-added"
+
+# ── rv-exec functional test ──────────────────────────────────────────
+echo "=== rv-exec functional ==="
+
+# Import a test secret
+echo "TEST_VALUE=secret123" > .env
+rv import .env 2>&1
+
+# Approve the project
+rv approve 2>&1
+[ $? -eq 0 ] && pass "rv approve succeeded" || fail "rv approve failed"
+
+# Test rv-exec --all
+output=$(rv-exec --all -- printenv TEST_VALUE 2>&1)
+if [ -n "$output" ]; then
+  pass "rv-exec --all works"
+else
+  fail "rv-exec --all failed: $output"
+fi
 
 # ── Summary ──────────────────────────────────────────────────────────
 echo ""

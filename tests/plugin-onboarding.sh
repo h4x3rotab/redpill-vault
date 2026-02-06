@@ -6,11 +6,9 @@ set -euo pipefail
 # Simulates the exact developer experience:
 #   1. Install plugin via marketplace (rv NOT installed yet)
 #   2. Ask Claude to set up redpill-vault — it installs the package and runs rv init
-#   3. Hook blocks because project is not approved
-#   4. User runs rv approve
-#   5. Approved project: command passes through
-#   6. Verify skill and plugin artifacts
-#   7. Clean uninstall
+#   3. Claude uses rv-exec --all to run commands with secrets
+#   4. Verify skill and plugin artifacts
+#   5. Clean uninstall
 #
 # Requires: claude CLI authenticated
 
@@ -36,6 +34,8 @@ cleanup() {
 trap cleanup EXIT
 
 export RV_CONFIG_DIR="$FAKE_STATE/rv"
+export HOME="$FAKE_STATE/home"
+mkdir -p "$HOME"
 # Tell setup.sh to install from local source instead of npm registry
 export RV_INSTALL_SOURCE="$PROJECT_DIR"
 
@@ -44,10 +44,10 @@ echo "=== Ensure rv not installed ==="
 npm run build --prefix "$PROJECT_DIR" >/dev/null 2>&1
 npm unlink -g redpill-vault 2>/dev/null || true
 
-if command -v rv-hook &>/dev/null; then
-  fail "rv-hook still on PATH after unlink"
+if command -v rv &>/dev/null; then
+  echo "  Note: rv found on PATH (will be reinstalled by skill)"
 else
-  pass "rv-hook not on PATH (clean slate)"
+  pass "rv not on PATH (clean slate)"
 fi
 
 # ── 1. Plugin validation + install ───────────────────────────────────
@@ -96,10 +96,10 @@ else
   fail "rv not on PATH after agent setup"
 fi
 
-if command -v rv-hook &>/dev/null; then
-  pass "Claude installed rv-hook"
+if command -v rv-exec &>/dev/null; then
+  pass "Claude installed rv-exec"
 else
-  fail "rv-hook not on PATH after agent setup"
+  fail "rv-exec not on PATH after agent setup"
 fi
 
 if [ -f .rv.json ]; then
@@ -108,54 +108,42 @@ else
   fail ".rv.json missing — Claude did not run rv init"
 fi
 
-# ── 3. Hook blocks unapproved project ────────────────────────────────
-echo ""
-echo "=== Hook blocks unapproved project ==="
-# Add a test key to .rv.json so the hook has secrets to check
-python3 -c "
-import json
-with open('.rv.json') as f: cfg = json.load(f)
-cfg['secrets']['TEST_KEY'] = {'description': 'test secret'}
-with open('.rv.json', 'w') as f: json.dump(cfg, f, indent=2)
-"
-
-hook_output=$(claude -p "Run this exact bash command: echo hello" \
-  --allowedTools "Bash" \
-  2>&1 || true)
-
-echo "$hook_output"
-
-if echo "$hook_output" | grep -qi "not approved\|rv approve\|blocked"; then
-  pass "hook blocks unapproved project"
+if [ -f "$RV_CONFIG_DIR/master-key" ]; then
+  pass "master-key created"
 else
-  fail "hook did not block unapproved project"
+  fail "master-key missing"
 fi
 
-# ── 4. User runs rv approve ──────────────────────────────────────────
+# ── 3. Test rv-exec --all with Claude ────────────────────────────────
 echo ""
-echo "=== User runs rv approve ==="
+echo "=== rv-exec with secrets ==="
+
+# Add a test secret
+echo "TEST_SECRET=plugin_onboarding_test" > .env
+rv import .env 2>&1
+
+# Approve the project (required for rv-exec to work)
 rv approve 2>&1
-# Remove test key from .rv.json
-python3 -c "
-import json
-with open('.rv.json') as f: cfg = json.load(f)
-cfg['secrets'].pop('TEST_KEY', None)
-with open('.rv.json', 'w') as f: json.dump(cfg, f, indent=2)
-"
+[ $? -eq 0 ] && pass "rv approve succeeded" || fail "rv approve failed"
 
-approve_output=$(claude -p "Run this exact bash command: echo rv-plugin-test-ok" \
-  --allowedTools "Bash" \
-  2>&1 || true)
-
-echo "$approve_output"
-
-if echo "$approve_output" | grep -qi "rv-plugin-test-ok"; then
-  pass "approved project: command passes through"
+# Verify the import worked
+list_output=$(rv list 2>&1)
+echo "$list_output"
+if echo "$list_output" | grep -q "TEST_SECRET"; then
+  pass "rv import added TEST_SECRET"
 else
-  fail "approved project: command did not run"
+  fail "TEST_SECRET not in rv list"
 fi
 
-# ── 5. Skill file checks ─────────────────────────────────────────────
+# Test rv-exec directly
+exec_output=$(rv-exec --all -- printenv TEST_SECRET 2>&1)
+if [ -n "$exec_output" ]; then
+  pass "rv-exec --all injects secret"
+else
+  fail "rv-exec --all failed to inject secret"
+fi
+
+# ── 4. Skill file checks ─────────────────────────────────────────────
 echo ""
 echo "=== Skill file ==="
 test -f "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
@@ -164,10 +152,10 @@ grep -q "^---" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
   && pass "SKILL.md has YAML frontmatter" || fail "SKILL.md missing frontmatter"
 grep -q "setup.sh" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
   && pass "SKILL.md has install instructions" || fail "SKILL.md missing install instructions"
-grep -q "user only" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
-  && pass "SKILL.md marks approve as user-only" || fail "SKILL.md missing user-only marker"
+grep -q "rv-exec --all" "$PROJECT_DIR/skills/redpill-vault/SKILL.md" \
+  && pass "SKILL.md documents rv-exec --all" || fail "SKILL.md missing rv-exec --all docs"
 
-# ── 6. Clean uninstall ───────────────────────────────────────────────
+# ── 5. Clean uninstall ───────────────────────────────────────────────
 echo ""
 echo "=== Plugin uninstall ==="
 claude plugin uninstall "${PLUGIN_NAME}@${MARKETPLACE_NAME}" 2>&1 \

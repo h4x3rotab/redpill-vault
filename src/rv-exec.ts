@@ -2,7 +2,7 @@
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname } from "node:path";
-import { getMasterKeyPath } from "./approval.js";
+import { getMasterKeyPath, isApproved } from "./approval.js";
 import { buildScopedKey, loadConfig, findConfig, getProjectName } from "./config.js";
 import { Vault, ensureAuth, getVaultKeys, openVault } from "./vault/index.js";
 
@@ -102,6 +102,16 @@ if (injectAll) {
 
 if (effectiveKeys.length === 0) {
   process.stderr.write("rv-exec: no keys specified (use --all or list keys)\n");
+  process.exit(1);
+}
+
+// Check if project is approved
+if (configRoot && !isApproved(configRoot)) {
+  process.stderr.write(
+    `rv-exec: project not approved for secret injection\n` +
+    `  Run: rv approve\n` +
+    `  (in ${configRoot})\n`
+  );
   process.exit(1);
 }
 

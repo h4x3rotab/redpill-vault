@@ -4,21 +4,24 @@ set -euo pipefail
 # Integration test for redpill-vault
 #
 # Isolation strategy:
-#   RV_CONFIG_DIR → temp dir (keeps master-key + approved.json isolated)
-#   HOME → temp dir (isolates psst's ~/.psst/ global vault)
-#   REAL_HOME → preserved for claude -p calls (needs auth)
+#   RV_CONFIG_DIR → temp dir (keeps master-key isolated)
+#   HOME → temp dir (isolates ~/.psst/ global vault)
 #
-# Known psst quirks:
-#   - `sh -c 'echo $VAR'` produces no output with psst injection; use `printenv` instead
-#   - psst redacts secret values as [REDACTED] in output; tests can't match literal values
-#   - psst init exits 2 when vault already exists; message is on stdout not stderr
+# Tests:
+#   - rv init (master key, vault, .rv.json)
+#   - rv import (from .env file)
+#   - rv list (with project/global sources)
+#   - rv set/rm (single secret management)
+#   - rv check (verify keys exist)
+#   - rv doctor (full health check)
+#   - rv-exec --all (inject all secrets)
+#   - rv-exec from subdirectory (auto-detect project)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 FAKE_STATE="$(mktemp -d)"
 FAKE_PROJECT="$(mktemp -d)"
 
-REAL_HOME="$HOME"
 export HOME="$FAKE_STATE/home"
 mkdir -p "$HOME"
 export RV_CONFIG_DIR="$FAKE_STATE/rv"
@@ -43,6 +46,7 @@ echo ""
 # --- rv init ---
 echo "--- rv init ---"
 
+cd "$FAKE_PROJECT"
 node "$PROJECT_DIR/dist/cli.js" init 2>&1 && {
   if [ -f "$RV_CONFIG_DIR/master-key" ]; then
     pass "master-key created"
@@ -65,6 +69,20 @@ node "$PROJECT_DIR/dist/cli.js" init 2>&1 && {
   else
     fail "master-key format unexpected: $KEY"
   fi
+
+  # Check vault was created
+  if [ -f "$HOME/.psst/vault.db" ]; then
+    pass "vault.db created"
+  else
+    fail "vault.db not found"
+  fi
+
+  # Check .rv.json was created
+  if [ -f "$FAKE_PROJECT/.rv.json" ]; then
+    pass ".rv.json created"
+  else
+    fail ".rv.json not found"
+  fi
 } || fail "rv init failed"
 
 # --- rv init idempotent ---
@@ -80,23 +98,53 @@ else
   fail "master-key changed on re-init"
 fi
 
-# --- Setup a test project ---
+# --- rv import ---
 echo ""
-echo "--- project setup ---"
+echo "--- rv import ---"
 
-cd "$FAKE_PROJECT"
-cat > .rv.json <<'EOF'
-{
-  "secrets": {
-    "TEST_SECRET": { "description": "a test secret" }
-  }
-}
+# Create a .env file
+cat > "$FAKE_PROJECT/.env" <<'EOF'
+# Test env file
+TEST_SECRET=hunter2
+ANOTHER_KEY="quoted value"
+export EXPORTED_VAR=exported_value
 EOF
-pass "created .rv.json"
 
-# Store a secret in psst
-MASTER_KEY=$(cat "$RV_CONFIG_DIR/master-key" | tr -d '\n')
-echo "hunter2" | PSST_PASSWORD="$MASTER_KEY" psst --global set TEST_SECRET --stdin 2>&1 && pass "stored TEST_SECRET in vault" || fail "psst set failed"
+node "$PROJECT_DIR/dist/cli.js" import .env 2>&1
+if [ $? -eq 0 ]; then
+  pass "rv import succeeded"
+else
+  fail "rv import failed"
+fi
+
+# Check .rv.json was updated
+if grep -q "TEST_SECRET" "$FAKE_PROJECT/.rv.json"; then
+  pass "TEST_SECRET added to .rv.json"
+else
+  fail "TEST_SECRET not in .rv.json"
+fi
+
+# --- rv list ---
+echo ""
+echo "--- rv list ---"
+
+LIST_OUTPUT=$(node "$PROJECT_DIR/dist/cli.js" list 2>&1)
+if echo "$LIST_OUTPUT" | grep -q "TEST_SECRET.*\[project\]"; then
+  pass "rv list shows TEST_SECRET as [project]"
+else
+  fail "rv list output unexpected: $LIST_OUTPUT"
+fi
+
+# --- rv check ---
+echo ""
+echo "--- rv check ---"
+
+CHECK_OUTPUT=$(node "$PROJECT_DIR/dist/cli.js" check 2>&1)
+if echo "$CHECK_OUTPUT" | grep -q "✓.*TEST_SECRET"; then
+  pass "rv check shows TEST_SECRET present"
+else
+  fail "rv check output unexpected: $CHECK_OUTPUT"
+fi
 
 # --- rv approve ---
 echo ""
@@ -104,191 +152,161 @@ echo "--- rv approve ---"
 
 node "$PROJECT_DIR/dist/cli.js" approve 2>&1
 if [ -f "$RV_CONFIG_DIR/approved.json" ]; then
-  if grep -q "$FAKE_PROJECT" "$RV_CONFIG_DIR/approved.json"; then
-    pass "project approved in approved.json"
-  else
-    fail "project path not in approved.json"
-  fi
+  pass "rv approve created approved.json"
 else
   fail "approved.json not created"
 fi
 
-# --- hook: wraps command with rv-exec ---
-echo ""
-echo "--- hook: command wrapping ---"
-
-HOOK_INPUT=$(cat <<ENDJSON
-{"tool_name":"Bash","tool_input":{"command":"echo hi"},"cwd":"$FAKE_PROJECT"}
-ENDJSON
-)
-HOOK_OUTPUT=$(echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null || true)
-# Now includes --project flag with derived project name (temp dir basename)
-if echo "$HOOK_OUTPUT" | grep -q "rv-exec --project .* TEST_SECRET -- bash -c 'echo hi'"; then
-  pass "hook wraps with rv-exec and project"
-else
-  fail "hook output unexpected: $HOOK_OUTPUT"
-fi
-
-# --- hook: blocks rv approve ---
-echo ""
-echo "--- hook: blocks agent commands ---"
-
-HOOK_INPUT='{"tool_name":"Bash","tool_input":{"command":"rv approve"},"cwd":"'"$FAKE_PROJECT"'"}'
-if echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null; then
-  fail "hook should have blocked rv approve"
-else
-  pass "hook blocked rv approve"
-fi
-
-HOOK_INPUT='{"tool_name":"Bash","tool_input":{"command":"rv init"},"cwd":"'"$FAKE_PROJECT"'"}'
-if echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null; then
-  pass "hook allows rv init (agent runs it during setup)"
-else
-  fail "hook should allow rv init"
-fi
-
-HOOK_INPUT='{"tool_name":"Bash","tool_input":{"command":"rv revoke"},"cwd":"'"$FAKE_PROJECT"'"}'
-if echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null; then
-  fail "hook should have blocked rv revoke"
-else
-  pass "hook blocked rv revoke"
-fi
-
-# --- rv-exec: resolves key and runs command ---
-echo ""
-echo "--- rv-exec: secret injection ---"
-
-# Use printenv to check env var exists; psst redacts values so check for [REDACTED] or actual value
-OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" TEST_SECRET -- printenv TEST_SECRET 2>&1)
-if [ -n "$OUTPUT" ]; then
-  pass "rv-exec injected secret (got: ${OUTPUT:0:20})"
-else
-  fail "rv-exec did not inject secret, output was empty"
-fi
-
-# --- rv revoke ---
-echo ""
-echo "--- rv revoke ---"
-
-node "$PROJECT_DIR/dist/cli.js" revoke 2>&1
-
-HOOK_INPUT='{"tool_name":"Bash","tool_input":{"command":"echo hi"},"cwd":"'"$FAKE_PROJECT"'"}'
-if echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null; then
-  fail "hook should have blocked after revoke"
-else
-  pass "hook blocks after revoke"
-fi
-
-# --- hook: passthrough when no secrets ---
-echo ""
-echo "--- hook: passthrough with empty secrets ---"
-
-EMPTY_PROJECT="$(mktemp -d)"
-cat > "$EMPTY_PROJECT/.rv.json" <<'EOF'
-{ "secrets": {} }
+# Test that rv-exec fails without approval (in a new unapproved project)
+UNAPPROVED_PROJECT="$(mktemp -d)"
+cat > "$UNAPPROVED_PROJECT/.rv.json" <<'EOF'
+{ "secrets": { "TEST_KEY": {} } }
 EOF
-# Approve it first
-node "$PROJECT_DIR/dist/cli.js" approve 2>&1  # approves cwd which is FAKE_PROJECT, so cd first
-(cd "$EMPTY_PROJECT" && node "$PROJECT_DIR/dist/cli.js" approve 2>&1)
-
-HOOK_INPUT='{"tool_name":"Bash","tool_input":{"command":"echo hi"},"cwd":"'"$EMPTY_PROJECT"'"}'
-HOOK_OUTPUT=$(echo "$HOOK_INPUT" | node "$PROJECT_DIR/dist/hook.js" 2>/dev/null || true)
-if [ -z "$HOOK_OUTPUT" ] || echo "$HOOK_OUTPUT" | grep -q '{}'; then
-  pass "passthrough with empty secrets"
+OUTPUT=$(cd "$UNAPPROVED_PROJECT" && node "$PROJECT_DIR/dist/rv-exec.js" --all -- echo test 2>&1) || true
+if echo "$OUTPUT" | grep -q "not approved"; then
+  pass "rv-exec blocks unapproved project"
 else
-  fail "expected passthrough, got: $HOOK_OUTPUT"
+  fail "rv-exec should block unapproved project: $OUTPUT"
 fi
-rm -rf "$EMPTY_PROJECT"
+rm -rf "$UNAPPROVED_PROJECT"
+
+# --- rv-exec --all ---
+echo ""
+echo "--- rv-exec --all ---"
+
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv TEST_SECRET 2>&1)
+if [ "$OUTPUT" = "[REDACTED]" ] || [ "$OUTPUT" = "hunter2" ]; then
+  pass "rv-exec --all injected TEST_SECRET"
+else
+  fail "rv-exec --all output unexpected: $OUTPUT"
+fi
+
+# Test multiple env vars
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- bash -c 'echo $TEST_SECRET $ANOTHER_KEY' 2>&1)
+if [ -n "$OUTPUT" ]; then
+  pass "rv-exec --all injected multiple secrets"
+else
+  fail "rv-exec --all multiple secrets failed"
+fi
+
+# --- rv-exec from subdirectory ---
+echo ""
+echo "--- rv-exec from subdirectory ---"
+
+mkdir -p "$FAKE_PROJECT/subdir/nested"
+cd "$FAKE_PROJECT/subdir/nested"
+
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv TEST_SECRET 2>&1)
+if [ "$OUTPUT" = "[REDACTED]" ] || [ "$OUTPUT" = "hunter2" ]; then
+  pass "rv-exec from subdirectory found .rv.json"
+else
+  fail "rv-exec from subdirectory failed: $OUTPUT"
+fi
+
+cd "$FAKE_PROJECT"
+
+# --- rv-exec specific keys ---
+echo ""
+echo "--- rv-exec specific keys ---"
+
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" TEST_SECRET -- printenv TEST_SECRET 2>&1)
+if [ "$OUTPUT" = "[REDACTED]" ] || [ "$OUTPUT" = "hunter2" ]; then
+  pass "rv-exec with specific key works"
+else
+  fail "rv-exec specific key failed: $OUTPUT"
+fi
+
+# --- rv-exec --dotenv ---
+echo ""
+echo "--- rv-exec --dotenv ---"
+
+node "$PROJECT_DIR/dist/rv-exec.js" --all --dotenv .env.tmp -- cat .env.tmp 2>&1
+# .env.tmp should be deleted after command
+if [ ! -f "$FAKE_PROJECT/.env.tmp" ]; then
+  pass "rv-exec --dotenv cleans up temp file"
+else
+  fail "rv-exec --dotenv left temp file behind"
+  rm -f "$FAKE_PROJECT/.env.tmp"
+fi
+
+# --- rv set (global) ---
+echo ""
+echo "--- rv set (global) ---"
+
+echo "global_secret_value" | node "$PROJECT_DIR/dist/cli.js" set GLOBAL_KEY -g 2>&1
+if [ $? -eq 0 ]; then
+  pass "rv set -g succeeded"
+else
+  fail "rv set -g failed"
+fi
+
+# Verify with rv list -g
+LIST_OUTPUT=$(node "$PROJECT_DIR/dist/cli.js" list -g 2>&1)
+if echo "$LIST_OUTPUT" | grep -q "GLOBAL_KEY"; then
+  pass "rv list -g shows GLOBAL_KEY"
+else
+  fail "rv list -g output unexpected: $LIST_OUTPUT"
+fi
+
+# --- rv rm ---
+echo ""
+echo "--- rv rm ---"
+
+node "$PROJECT_DIR/dist/cli.js" rm GLOBAL_KEY -g 2>&1
+if [ $? -eq 0 ]; then
+  pass "rv rm -g succeeded"
+else
+  fail "rv rm -g failed"
+fi
+
+# Verify removed
+LIST_OUTPUT=$(node "$PROJECT_DIR/dist/cli.js" list -g 2>&1)
+if echo "$LIST_OUTPUT" | grep -q "GLOBAL_KEY"; then
+  fail "GLOBAL_KEY still exists after rm"
+else
+  pass "GLOBAL_KEY removed from vault"
+fi
 
 # --- rv doctor ---
 echo ""
 echo "--- rv doctor ---"
 
-# Re-approve for doctor
-(cd "$FAKE_PROJECT" && node "$PROJECT_DIR/dist/cli.js" approve 2>&1)
-DOCTOR_OUTPUT=$(cd "$FAKE_PROJECT" && node "$PROJECT_DIR/dist/cli.js" doctor 2>&1) || true
-if echo "$DOCTOR_OUTPUT" | grep -q "master key"; then
+DOCTOR_OUTPUT=$(node "$PROJECT_DIR/dist/cli.js" doctor 2>&1)
+if echo "$DOCTOR_OUTPUT" | grep -q "✓.*master key"; then
   pass "doctor checks master key"
 else
-  fail "doctor missing master key check"
+  fail "doctor missing master key check: $DOCTOR_OUTPUT"
 fi
-if echo "$DOCTOR_OUTPUT" | grep -q "project approved"; then
-  pass "doctor checks project approval"
+if echo "$DOCTOR_OUTPUT" | grep -q "✓.*vault"; then
+  pass "doctor checks vault"
 else
-  fail "doctor missing approval check"
+  fail "doctor missing vault check"
+fi
+if echo "$DOCTOR_OUTPUT" | grep -q "All checks passed"; then
+  pass "doctor all checks passed"
+else
+  fail "doctor shows failures"
 fi
 
-# --- E2E with Claude Code ---
+# --- rv-exec missing key handling ---
 echo ""
-echo "--- e2e: claude -p with hook ---"
+echo "--- rv-exec missing key handling ---"
 
-# Only run if claude is available
-if command -v claude &>/dev/null; then
-  # Re-approve fake project
-  (cd "$FAKE_PROJECT" && node "$PROJECT_DIR/dist/cli.js" approve 2>&1)
-
-  # Set up project-level claude hook config
-  mkdir -p "$FAKE_PROJECT/.claude"
-  cat > "$FAKE_PROJECT/.claude/settings.json" <<ENDJSON
+# Add a key to .rv.json that doesn't exist in vault
+cat > "$FAKE_PROJECT/.rv.json" <<'EOF'
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node $PROJECT_DIR/dist/hook.js"
-          }
-        ]
-      }
-    ]
+  "secrets": {
+    "TEST_SECRET": {},
+    "MISSING_KEY": {}
   }
 }
-ENDJSON
+EOF
 
-  # Initialize git so claude doesn't complain
-  (cd "$FAKE_PROJECT" && git init -q 2>/dev/null || true)
-
-  # Test 1: run a normal command — hook should rewrite to rv-exec and inject secret
-  CLAUDE_OUTPUT=$(cd "$FAKE_PROJECT" && HOME="$REAL_HOME" claude -p \
-    'Run this exact bash command verbatim and show the output: echo hello' \
-    --allowedTools 'Bash' \
-    --dangerously-skip-permissions \
-    2>&1) || true
-
-  echo "  claude output (first 300 chars): ${CLAUDE_OUTPUT:0:300}"
-
-  # The secret value should not appear in plain text
-  if echo "$CLAUDE_OUTPUT" | grep -q "hunter2"; then
-    fail "e2e: secret value leaked in claude output"
-  else
-    pass "e2e: secret value not leaked"
-  fi
-
-  # The command should have run (hello in output) or show hook evidence
-  if echo "$CLAUDE_OUTPUT" | grep -qi "hello\|rv-exec\|redpill-vault\|blocked"; then
-    pass "e2e: hook engaged (command ran or was processed)"
-  else
-    fail "e2e: no evidence of hook activity in output: ${CLAUDE_OUTPUT:0:200}"
-  fi
-
-  # Test 2: agent tries to run rv approve — should be blocked
-  CLAUDE_OUTPUT2=$(cd "$FAKE_PROJECT" && HOME="$REAL_HOME" claude -p \
-    'Run this exact bash command verbatim: rv approve' \
-    --allowedTools 'Bash' \
-    --dangerously-skip-permissions \
-    2>&1) || true
-
-  echo "  claude approve output (first 300 chars): ${CLAUDE_OUTPUT2:0:300}"
-
-  if echo "$CLAUDE_OUTPUT2" | grep -qi "blocked\|denied\|not allowed\|only the user\|redpill-vault"; then
-    pass "e2e: rv approve blocked by hook"
-  else
-    fail "e2e: rv approve was not blocked: ${CLAUDE_OUTPUT2:0:200}"
-  fi
+OUTPUT=$(node "$PROJECT_DIR/dist/rv-exec.js" --all -- printenv TEST_SECRET 2>&1)
+if echo "$OUTPUT" | grep -q "missing secrets.*MISSING_KEY"; then
+  pass "rv-exec reports missing keys"
 else
-  echo "  SKIP: claude not found in PATH"
+  fail "rv-exec didn't report missing key: $OUTPUT"
 fi
 
 # --- Summary ---
