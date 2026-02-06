@@ -7,13 +7,14 @@ import { buildScopedKey, loadConfig, findConfig, getProjectName } from "./config
 import { Vault, ensureAuth, getVaultKeys, openVault } from "./vault/index.js";
 
 /**
- * rv-exec [--project NAME] [--dotenv PATH] [--no-mask] KEY1 KEY2 -- command args...
+ * rv-exec [--project NAME] [--dotenv PATH] [--no-mask] [--all] [KEY1 KEY2...] -- command args...
  *
  * Resolves vault auth, then runs command with secrets injected.
  * With --project, tries PROJECT__KEY first, falls back to KEY.
  * With --dotenv, writes resolved secrets to a .env file before running
  * the command, and deletes it after.
  * With --no-mask, disables secret masking in output.
+ * With --all, injects all secrets defined in .rv.json (no need to list keys).
  */
 
 const args = process.argv.slice(2);
@@ -43,30 +44,38 @@ if (noMaskIndex !== -1) {
   remaining = [...remaining.slice(0, noMaskIndex), ...remaining.slice(noMaskIndex + 1)];
 }
 
+// Parse --all argument
+let injectAll = false;
+const allIndex = remaining.indexOf("--all");
+if (allIndex !== -1) {
+  injectAll = true;
+  remaining = [...remaining.slice(0, allIndex), ...remaining.slice(allIndex + 1)];
+}
+
 const sepIndex = remaining.indexOf("--");
 
 if (sepIndex === -1 || sepIndex === remaining.length - 1) {
-  process.stderr.write("Usage: rv-exec [--project NAME] [--dotenv PATH] [--no-mask] KEY1 [KEY2...] -- command [args...]\n");
+  process.stderr.write("Usage: rv-exec [--all] [--project NAME] [--dotenv PATH] [--no-mask] [KEY...] -- command [args...]\n");
   process.exit(1);
 }
 
 const keys = remaining.slice(0, sepIndex);
 const command = remaining.slice(sepIndex + 1);
 
-if (keys.length === 0) {
-  process.stderr.write("rv-exec: no keys specified\n");
-  process.exit(1);
-}
-
-// Auto-detect project name if not provided
-if (!projectName) {
+// Auto-detect project and config
+let configRoot: string | null = null;
+let config: ReturnType<typeof loadConfig> = null;
+{
   let dir = process.cwd();
   while (true) {
     if (findConfig(dir)) {
       try {
-        const config = loadConfig(dir);
+        config = loadConfig(dir);
         if (config) {
-          projectName = getProjectName(config, dir);
+          configRoot = dir;
+          if (!projectName) {
+            projectName = getProjectName(config, dir);
+          }
           break;
         }
       } catch {}
@@ -75,6 +84,25 @@ if (!projectName) {
     if (parent === dir) break;
     dir = parent;
   }
+}
+
+// If --all, get keys from config
+let effectiveKeys = keys;
+if (injectAll) {
+  if (!config) {
+    process.stderr.write("rv-exec: --all requires .rv.json config\n");
+    process.exit(1);
+  }
+  effectiveKeys = Object.keys(config.secrets);
+  if (effectiveKeys.length === 0) {
+    process.stderr.write("rv-exec: no secrets defined in .rv.json\n");
+    process.exit(1);
+  }
+}
+
+if (effectiveKeys.length === 0) {
+  process.stderr.write("rv-exec: no keys specified (use --all or list keys)\n");
+  process.exit(1);
 }
 
 // Ensure auth and open vault
@@ -106,7 +134,7 @@ interface ResolvedKey {
 const resolvedKeys: ResolvedKey[] = [];
 const missingKeys: string[] = [];
 
-for (const keySpec of keys) {
+for (const keySpec of effectiveKeys) {
   const [key, alias] = keySpec.includes("=") ? keySpec.split("=", 2) : [keySpec, null];
   const envName = alias ?? key;
 
