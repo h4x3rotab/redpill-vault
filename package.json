@@ -1,6 +1,6 @@
 {
   "name": "redpill-vault",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Secure credential manager for AI tools — transparent secret injection from an encrypted vault",
   "type": "module",
   "repository": {
@@ -13,7 +13,6 @@
   },
   "bin": {
     "rv": "./dist/cli.js",
-    "rv-hook": "./dist/hook.js",
     "rv-exec": "./dist/rv-exec.js"
   },
   "scripts": {
@@ -25,8 +24,7 @@
   "files": [
     "dist",
     ".claude-plugin",
-    "skills",
-    "hooks"
+    "skills"
   ],
   "keywords": [
     "secrets",

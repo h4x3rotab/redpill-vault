@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { CONFIG_FILENAME, loadConfig, getProjectName, buildScopedKey, parseEnvFile } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
-import { getRvConfigDir, getMasterKeyPath, approveProject, revokeProject, isApproved } from "./approval.js";
+import { getRvConfigDir, getMasterKeyPath } from "./approval.js";
 import { Vault, openVault, getVaultKeys, initVault, ensureAuth, VAULT_VERSION } from "./vault/index.js";
 
 const program = new Command();
@@ -54,52 +53,11 @@ function runInit() {
     console.log(`${CONFIG_FILENAME} already exists`);
   }
 
-  // 4. Wire rv-hook into .claude/settings.json
-  const claudeDir = join(cwd, ".claude");
-  mkdirSync(claudeDir, { recursive: true });
-  const settingsPath = join(claudeDir, "settings.json");
-
-  const hookPath = join(dirname(fileURLToPath(import.meta.url)), "hook.js");
-  const hookDef = {
-    type: "command" as const,
-    command: `node ${hookPath}`,
-  };
-
-  let settings: Record<string, unknown> = {};
-  if (existsSync(settingsPath)) {
-    try {
-      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    } catch {
-      console.error("Warning: .claude/settings.json is malformed — overwriting");
-    }
-  }
-
-  if (!settings.hooks) settings.hooks = {};
-  const hooks = settings.hooks as Record<string, unknown>;
-  if (!hooks.PreToolUse) hooks.PreToolUse = [];
-  const preToolUse = hooks.PreToolUse as Array<Record<string, unknown>>;
-
-  const alreadyInstalled = preToolUse.some(entry => {
-    const inner = entry.hooks as Array<Record<string, unknown>> | undefined;
-    return inner?.some(h => {
-      const cmd = String(h.command ?? "");
-      return cmd === "rv-hook" || cmd.includes("setup.sh");
-    });
-  });
-  if (!alreadyInstalled) {
-    preToolUse.push({ matcher: "Bash", hooks: [hookDef] });
-    console.log("Added rv-hook to .claude/settings.json");
-  } else {
-    console.log("rv-hook already configured");
-  }
-
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-
-  // 5. Summary
+  // 4. Summary
   console.log("\nSetup complete. Next steps:");
   console.log("  rv import .env   — import secrets from a .env file");
   console.log("  Edit .rv.json    — choose which keys to inject");
-  console.log("  rv approve       — approve this project for secret injection");
+  console.log("  rv-exec --all -- <command>  — run command with secrets");
 }
 
 program
@@ -372,36 +330,7 @@ program
 
 program
   .command("init")
-  .description("Full project setup: master key, vault, .rv.json, and hook wiring")
+  .description("Initialize project: master key, vault, and .rv.json")
   .action(runInit);
-
-program
-  .command("approve")
-  .description("Approve the current project for secret injection")
-  .action(() => {
-    const cwd = process.cwd();
-    approveProject(cwd);
-    console.log(`Approved: ${cwd}`);
-
-    const config = loadConfig(cwd);
-    if (config && Object.keys(config.secrets).length > 0) {
-      console.log("Secrets that will be injected:");
-      for (const [key, entry] of Object.entries(config.secrets)) {
-        let line = `  ${key}`;
-        if (entry.as) line += ` → ${entry.as}`;
-        if (entry.description) line += ` — ${entry.description}`;
-        console.log(line);
-      }
-    }
-  });
-
-program
-  .command("revoke")
-  .description("Revoke approval for the current project")
-  .action(() => {
-    const cwd = process.cwd();
-    revokeProject(cwd);
-    console.log(`Revoked: ${cwd}`);
-  });
 
 program.parse();

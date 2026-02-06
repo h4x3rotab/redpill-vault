@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, CONFIG_FILENAME, getProjectName, buildScopedKey } from "./config.js";
-import { getMasterKeyPath, isApproved } from "./approval.js";
+import { getMasterKeyPath } from "./approval.js";
 import { Vault, openVault, getVaultKeys, VAULT_VERSION } from "./vault/index.js";
 
 export interface Check {
@@ -23,14 +23,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     checks.push({ name: "master key", ok: false, message: "master key not found — run: rv init" });
   }
 
-  // 3. project approved
-  if (isApproved(cwd)) {
-    checks.push({ name: "project approved", ok: true, message: "project is approved" });
-  } else {
-    checks.push({ name: "project approved", ok: false, message: "project not approved — run: rv approve" });
-  }
-
-  // 4. vault exists and accessible
+  // 3. vault exists and accessible
   const vaultPath = Vault.findVaultPath({ global: true });
   if (vaultPath) {
     checks.push({ name: "vault storage", ok: true, message: "vault accessible" });
@@ -38,7 +31,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     checks.push({ name: "vault storage", ok: false, message: "vault not accessible — run: rv init" });
   }
 
-  // 5. .rv.json exists
+  // 4. .rv.json exists
   const configPath = join(cwd, CONFIG_FILENAME);
   if (existsSync(configPath)) {
     checks.push({ name: CONFIG_FILENAME, ok: true, message: "config found" });
@@ -46,15 +39,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     checks.push({ name: CONFIG_FILENAME, ok: false, message: `${CONFIG_FILENAME} not found — run: rv init` });
   }
 
-  // 6. hook configured
-  const hookPath = join(cwd, ".claude", "settings.json");
-  if (existsSync(hookPath)) {
-    checks.push({ name: "hook config", ok: true, message: ".claude/settings.json exists" });
-  } else {
-    checks.push({ name: "hook config", ok: false, message: "hook not configured — run: rv init" });
-  }
-
-  // 7. keys present in vault
+  // 5. keys present in vault
   if (vaultPath) {
     const config = loadConfig(cwd);
     if (config) {

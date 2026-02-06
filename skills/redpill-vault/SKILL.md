@@ -1,15 +1,13 @@
 ---
 name: redpill-vault
-description: Manages all environment variables and credentials for AI tools. API keys, tokens, database URLs, and other secrets are stored in a vault and injected transparently into shell commands via a PreToolUse hook — the agent never sees secret values or the master key. Supports project-scoped and global credentials. Use this skill whenever you need to add, list, configure, or troubleshoot env vars, secrets, or credentials.
+description: Manages environment variables and credentials for AI tools. API keys, tokens, database URLs, and other secrets are stored in an encrypted vault. Use rv-exec to run commands with secrets injected. The agent never sees secret values or the master key.
 ---
 
 # redpill-vault
 
-Secure credential manager for AI tools. Secrets are injected transparently into shell commands — the agent never sees secret values or the master key.
+Secure credential manager for AI tools. Secrets are stored in an encrypted vault and injected into commands via `rv-exec`.
 
 ## Setup
-
-Run these commands in order. Step 1 installs the CLI — always run it first, even if `rv` appears missing.
 
 ```bash
 ./skills/redpill-vault/setup.sh
@@ -19,73 +17,68 @@ Run these commands in order. Step 1 installs the CLI — always run it first, ev
 rv init
 ```
 
-Then tell the user to run `rv approve` in their terminal. Only the user can approve — the hook blocks the agent from running this command.
+## Running commands with secrets
+
+Use `rv-exec --all` to inject all secrets from `.rv.json`:
+
+```bash
+rv-exec --all -- <command>
+```
+
+Examples:
+```bash
+rv-exec --all -- npm run deploy
+rv-exec --all -- docker push myimage:latest
+rv-exec --all -- bash -c 'echo $MY_SECRET'
+```
+
+The `--all` flag injects all secrets defined in `.rv.json`. Secrets are resolved from the vault at runtime — the agent never sees the values.
+
+### Specific keys
+
+To inject only specific keys:
+```bash
+rv-exec KEY1 KEY2 -- <command>
+```
+
+### Generating a .env file
+
+Some commands require a `.env` file. Use `--dotenv`:
+
+```bash
+rv-exec --all --dotenv .env -- phala deploy -e .env
+```
+
+This writes secrets to `.env` before running and deletes it after.
 
 ## Adding secrets
 
-**Important:** There is no `rv add` command. Use `rv import` to add secrets.
-
 ### Importing from .env
-
-To populate the vault from a `.env` file:
 
 ```bash
 rv import .env
 ```
 
-This imports **all** keys from the `.env` file, stores each as a project-scoped secret in the vault, and registers it in `.rv.json`. Secret values go directly to the encrypted vault and never appear in stdout.
+Imports all keys from the file, stores each as a project-scoped secret. Values go directly to the encrypted vault.
 
-To import specific keys only: `rv import .env GITHUB_TOKEN DATABASE_URL`
+To import specific keys: `rv import .env GITHUB_TOKEN DATABASE_URL`
 To import as global keys: `rv import .env -g`
 
-The user can also run `rv import .env` directly in their terminal to add new keys at any time.
+### Setting a single secret
 
-### Editing .rv.json directly
-
-To control which keys get injected, edit `.rv.json` directly. Each key in the `secrets` object will be injected as an env var:
-
-```json
-{
-  "secrets": {
-    "GITHUB_TOKEN": { "description": "GitHub API token" },
-    "DATABASE_URL": {}
-  }
-}
+The user runs in their terminal:
+```bash
+rv set KEY_NAME
 ```
 
-### Setting or removing a single secret
+Reads value from stdin. Use `-g` for global key.
 
-The user can set or remove individual secrets in their terminal:
-
-- `rv set KEY_NAME` — reads value from stdin, stores as project-scoped key
-- `rv set KEY_NAME -g` — stores as global key
-- `rv rm KEY_NAME` — removes the project-scoped key from vault
-- `rv rm KEY_NAME -g` — removes the global key from vault
-
-These commands only affect the vault — they do not modify `.rv.json`. The agent is blocked from running `rv set` and `rv rm`.
-
-### When secrets are missing
-
-If `rv list` shows `[missing]` for a key, tell the user to run one of these in their terminal:
-
-- `rv import .env` — to bulk-import from an env file
-- `rv set KEY_NAME` — to set a single key (reads value from stdin)
-
-## How it works
-
-Once approved, every Bash command the agent runs is automatically wrapped with `rv-exec`, which injects the secrets listed in `.rv.json` as environment variables. The agent never sees the secret values — they are resolved at execution time by `rv-exec` from the encrypted vault.
-
-**Project-scoped fallback:** For each key, `rv-exec` checks for a project-scoped key (`PROJECT__KEY`) first, then falls back to the global key (`KEY`). This means a project can override global credentials or inherit them without any extra config.
-
-**Listing secrets:** `rv list` shows each key's source — `[project]`, `[global]`, or `[missing]`.
-
-**Generating a .env file for commands that need one:** Some commands require a `.env` file (e.g., `phala deploy -e .env`). Use `rv-exec --dotenv` to generate it temporarily:
+### Removing secrets
 
 ```bash
-rv-exec --dotenv .env -- phala deploy -e .env
+rv rm KEY_NAME
+rv rm KEY_NAME -g  # global
 ```
-
-This writes resolved secrets to `.env` before running the command, and deletes the file after. The hook does **not** auto-wrap this — the agent must write the `rv-exec --dotenv` prefix explicitly when a command needs a `.env` file. Secrets are never exposed to the agent.
 
 ## .rv.json
 
@@ -94,25 +87,34 @@ This writes resolved secrets to `.env` before running the command, and deletes t
   "project": "myapp",
   "secrets": {
     "GITHUB_TOKEN": { "description": "GitHub API token" },
-    "DATABASE_URL": { "description": "Postgres connection" }
+    "DATABASE_URL": {}
   }
 }
 ```
 
-The `"project"` field is optional. If omitted, the directory name is used.
+The `"project"` field is optional — directory name is used if omitted.
+
+## Key resolution
+
+For each key, `rv-exec` checks:
+1. Project-scoped key (`PROJECT__KEY`) first
+2. Falls back to global key (`KEY`)
+
+This lets projects override or inherit global credentials.
+
+`rv list` shows each key's source: `[project]`, `[global]`, or `[missing]`.
 
 ## Commands
 
-| Command | Who | Description |
-|---------|-----|-------------|
-| `rv init` | agent or user | Full setup (master key + vault + config + hook) |
-| `rv import .env` | agent or user | Import all secrets from a .env file into vault |
-| `rv import .env -g` | agent or user | Import as global keys |
-| `rv list` | agent or user | Show secrets with source (`[project]`/`[global]`/`[missing]`) |
-| `rv list -g` | agent or user | Show only global keys in vault |
-| `rv check` | agent or user | Verify all keys exist in vault |
-| `rv doctor` | agent or user | Full health check |
-| `rv set KEY` | **user only** | Set a single secret (reads value from stdin) |
-| `rv rm KEY` | **user only** | Remove a secret from vault |
-| `rv approve` | **user only** | Approve this project for injection |
-| `rv revoke` | **user only** | Revoke project approval |
+| Command | Description |
+|---------|-------------|
+| `rv init` | Initialize project (master key + vault + config) |
+| `rv import .env` | Import secrets from .env file |
+| `rv list` | Show secrets with source |
+| `rv list -g` | Show global keys in vault |
+| `rv check` | Verify all keys exist |
+| `rv doctor` | Full health check |
+| `rv set KEY` | Set a secret (user only, reads from stdin) |
+| `rv rm KEY` | Remove a secret |
+| `rv-exec --all -- cmd` | Run command with all secrets |
+| `rv-exec K1 K2 -- cmd` | Run command with specific secrets |
