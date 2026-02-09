@@ -1,6 +1,6 @@
 {
   "name": "redpill-vault",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Secure credential manager for AI tools — transparent secret injection from an encrypted vault",
   "type": "module",
   "repository": {
