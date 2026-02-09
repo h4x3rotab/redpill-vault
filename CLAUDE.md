@@ -38,7 +38,7 @@ skills/
 
 - **`rv init`** creates master key, initializes vault, writes `.rv.json`. Idempotent.
 - **`rv-exec --all -- command`** injects all secrets from `.rv.json` into the command's environment.
-- **`rv-exec` auto-detects project** by walking up directories to find `.rv.json`.
+- **All `rv` commands auto-detect project** by walking up directories to find `.rv.json`.
 - **Vault uses AES-GCM encryption** with a master key stored at `~/.config/rv/master-key`.
 - **Key names must be uppercase with underscores only.** Project-scoped keys use `PROJECT__KEY` format.
 - **`RV_CONFIG_DIR` env var** overrides the default `~/.config/rv/` location.
@@ -51,7 +51,7 @@ Each project can have its own credentials that override global ones. Resolution 
 - **Vault key format:** `PROJECT__KEY` (double underscore, all uppercase).
 - **`rv list`** shows `[project]`, `[global]`, or `[missing]` source for each key.
 - **`rv import .env`** imports keys into vault (project-scoped by default, `-g` for global).
-- **`rv set KEY`** sets a single secret from stdin. Does not modify `.rv.json`.
+- **`rv set KEY`** sets a single secret from stdin. Auto-adds to `.rv.json` if not already listed (skipped with `-g`).
 - **`rv rm KEY`** removes a secret from vault. Does not modify `.rv.json`.
 - **`rv-exec --dotenv PATH`** writes secrets to a temp `.env` file before running, deletes after.
 - **`rv-exec --all`** injects all secrets from `.rv.json` without listing them.

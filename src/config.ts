@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 
 export interface SecretEntry {
   description?: string;
@@ -15,8 +15,14 @@ export interface RvConfig {
 export const CONFIG_FILENAME = ".rv.json";
 
 export function findConfig(cwd: string = process.cwd()): string | null {
-  const p = join(cwd, CONFIG_FILENAME);
-  return existsSync(p) ? p : null;
+  let dir = cwd;
+  while (true) {
+    const p = join(dir, CONFIG_FILENAME);
+    if (existsSync(p)) return p;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 export function loadConfig(cwd: string = process.cwd()): RvConfig | null {

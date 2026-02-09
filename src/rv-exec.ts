@@ -62,27 +62,19 @@ if (sepIndex === -1 || sepIndex === remaining.length - 1) {
 const keys = remaining.slice(0, sepIndex);
 const command = remaining.slice(sepIndex + 1);
 
-// Auto-detect project and config
+// Auto-detect project and config (findConfig walks up directories)
 let configRoot: string | null = null;
 let config: ReturnType<typeof loadConfig> = null;
 {
-  let dir = process.cwd();
-  while (true) {
-    if (findConfig(dir)) {
-      try {
-        config = loadConfig(dir);
-        if (config) {
-          configRoot = dir;
-          if (!projectName) {
-            projectName = getProjectName(config, dir);
-          }
-          break;
-        }
-      } catch {}
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+  const configPath = findConfig();
+  if (configPath) {
+    try {
+      configRoot = dirname(configPath);
+      config = loadConfig();
+      if (config && !projectName) {
+        projectName = getProjectName(config, configRoot);
+      }
+    } catch {}
   }
 }
 

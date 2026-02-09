@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { loadConfig, CONFIG_FILENAME, getProjectName, buildScopedKey } from "./config.js";
+import { dirname } from "node:path";
+import { loadConfig, findConfig, CONFIG_FILENAME, getProjectName, buildScopedKey } from "./config.js";
 import { getMasterKeyPath, isApproved } from "./approval.js";
 import { Vault, openVault, getVaultKeys, VAULT_VERSION } from "./vault/index.js";
 
@@ -32,15 +32,16 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
   }
 
   // 4. .rv.json exists
-  const configPath = join(cwd, CONFIG_FILENAME);
-  if (existsSync(configPath)) {
+  const configPath = findConfig(cwd);
+  const configRoot = configPath ? dirname(configPath) : cwd;
+  if (configPath) {
     checks.push({ name: CONFIG_FILENAME, ok: true, message: "config found" });
   } else {
     checks.push({ name: CONFIG_FILENAME, ok: false, message: `${CONFIG_FILENAME} not found — run: rv init` });
   }
 
   // 5. project approved
-  if (isApproved(cwd)) {
+  if (isApproved(configRoot)) {
     checks.push({ name: "project approved", ok: true, message: "project approved for secret injection" });
   } else {
     checks.push({ name: "project approved", ok: false, message: "project not approved — run: rv approve" });
@@ -51,7 +52,7 @@ export function runChecks(cwd: string = process.cwd()): Check[] {
     const config = loadConfig(cwd);
     if (config) {
       const vaultKeys = getVaultKeys({ global: true });
-      const projectName = getProjectName(config, cwd);
+      const projectName = getProjectName(config, configRoot);
       for (const key of Object.keys(config.secrets)) {
         const projectKey = projectName ? buildScopedKey(projectName, key) : null;
         const hasProjectKey = projectKey && vaultKeys.has(projectKey);
@@ -74,12 +75,15 @@ export function checkKeys(cwd: string = process.cwd()): Check[] {
   const config = loadConfig(cwd);
   if (!config) return [{ name: CONFIG_FILENAME, ok: false, message: "no config found" }];
 
+  const configPath = findConfig(cwd);
+  const configRoot = configPath ? dirname(configPath) : cwd;
+
   const vaultKeys = getVaultKeys({ global: true });
   if (vaultKeys.size === 0 && !Vault.findVaultPath({ global: true })) {
     return [{ name: "vault", ok: false, message: "cannot access vault" }];
   }
 
-  const projectName = getProjectName(config, cwd);
+  const projectName = getProjectName(config, configRoot);
   const checks: Check[] = [];
   for (const key of Object.keys(config.secrets)) {
     const projectKey = projectName ? buildScopedKey(projectName, key) : null;

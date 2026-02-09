@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
-import { CONFIG_FILENAME, loadConfig, getProjectName, buildScopedKey, parseEnvFile } from "./config.js";
+import { CONFIG_FILENAME, loadConfig, findConfig, getProjectName, buildScopedKey, parseEnvFile } from "./config.js";
 import { runChecks, checkKeys } from "./doctor.js";
 import { getRvConfigDir, getMasterKeyPath, isApproved, approveProject, revokeProject } from "./approval.js";
 import { Vault, openVault, getVaultKeys, initVault, ensureAuth, VAULT_VERSION } from "./vault/index.js";
@@ -71,8 +71,9 @@ program
   .description("Show secrets from .rv.json with descriptions and source")
   .option("-g, --global", "Show only global keys in vault")
   .action((opts: { global?: boolean }) => {
-    const cwd = process.cwd();
     const config = loadConfig();
+    const configPath = findConfig();
+    const configRoot = configPath ? dirname(configPath) : process.cwd();
 
     if (opts.global) {
       // Show global keys only (exclude PROJECT__KEY scoped keys)
@@ -98,7 +99,7 @@ program
       return;
     }
 
-    const projectName = getProjectName(config, cwd);
+    const projectName = getProjectName(config, configRoot);
     const vaultKeys = getVaultKeys({ global: true });
 
     for (const [key, entry] of entries) {
@@ -132,7 +133,7 @@ program
   .option("-g, --global", "Import as global keys (not project-scoped)")
   .action(async (envfile: string, filterKeys: string[], opts: { global?: boolean }) => {
     const cwd = process.cwd();
-    const rvPath = join(cwd, CONFIG_FILENAME);
+    const rvPath = findConfig(cwd);
     const envPath = join(cwd, envfile);
 
     if (!existsSync(envPath)) {
@@ -140,18 +141,18 @@ program
       process.exit(1);
     }
 
-    const hasConfig = existsSync(rvPath);
-    if (!hasConfig && !opts.global) {
+    if (!rvPath && !opts.global) {
       console.error(`Not in a project (no ${CONFIG_FILENAME}). Use -g for global, or run: rv init`);
       process.exit(1);
     }
 
     let config: { project?: string; secrets: Record<string, Record<string, string>> } = { secrets: {} };
-    if (hasConfig) {
+    if (rvPath) {
       config = JSON.parse(readFileSync(rvPath, "utf-8"));
     }
 
-    const projectName = hasConfig ? getProjectName(config as any, cwd) : null;
+    const configRoot = rvPath ? dirname(rvPath) : cwd;
+    const projectName = rvPath ? getProjectName(config as any, configRoot) : null;
 
     ensureAuth();
     const vault = openVault({ global: true });
@@ -191,7 +192,7 @@ program
       }
 
       // Register in .rv.json if not already there
-      if (hasConfig && !config.secrets[key]) {
+      if (rvPath && !config.secrets[key]) {
         config.secrets[key] = {};
       }
     }
@@ -199,7 +200,7 @@ program
     vault.close();
 
     // Save updated config
-    if (hasConfig) {
+    if (rvPath) {
       writeFileSync(rvPath, JSON.stringify(config, null, 2) + "\n");
     }
 
@@ -211,9 +212,10 @@ program
   .description("Set a single secret value (reads from stdin)")
   .option("-g, --global", "Store as global key (not project-scoped)")
   .action(async (key: string, opts: { global?: boolean }) => {
-    const cwd = process.cwd();
-    const config = loadConfig();
-    const projectName = config ? getProjectName(config, cwd) : null;
+    const configPath = findConfig();
+    const configRoot = configPath ? dirname(configPath) : null;
+    const config = configPath ? loadConfig() : null;
+    const projectName = config && configRoot ? getProjectName(config, configRoot) : null;
 
     if (!opts.global && !projectName) {
       console.error(`Not in a project (no ${CONFIG_FILENAME}). Use -g for global, or run: rv init`);
@@ -250,6 +252,13 @@ program
     try {
       await vault.setSecret(vaultKey, value);
       console.log(`Set ${vaultKey}`);
+
+      // Auto-add to .rv.json if project-scoped and not already listed
+      if (!opts.global && configPath && config && !config.secrets[key]) {
+        config.secrets[key] = {};
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+        console.log(`Added ${key} to ${CONFIG_FILENAME}`);
+      }
     } catch (err) {
       console.error(`Failed to set ${vaultKey}: ${err instanceof Error ? err.message : "unknown error"}`);
       process.exit(1);
@@ -258,14 +267,16 @@ program
     }
   });
 
+
 program
   .command("rm <keys...>")
   .description("Remove one or more secrets from the vault")
   .option("-g, --global", "Remove global keys (not project-scoped)")
   .action((keys: string[], opts: { global?: boolean }) => {
-    const cwd = process.cwd();
-    const config = loadConfig();
-    const projectName = config ? getProjectName(config, cwd) : null;
+    const configPath = findConfig();
+    const configRoot = configPath ? dirname(configPath) : null;
+    const config = configPath ? loadConfig() : null;
+    const projectName = config && configRoot ? getProjectName(config, configRoot) : null;
 
     if (!opts.global && !projectName) {
       console.error(`Not in a project (no ${CONFIG_FILENAME}). Use -g for global, or run: rv init`);
@@ -333,12 +344,13 @@ program
   .command("approve")
   .description("Approve this project for secret injection (user only)")
   .action(() => {
-    const cwd = process.cwd();
-    if (isApproved(cwd)) {
+    const configPath = findConfig();
+    const projectRoot = configPath ? dirname(configPath) : process.cwd();
+    if (isApproved(projectRoot)) {
       console.log("Project already approved.");
       return;
     }
-    approveProject(cwd);
+    approveProject(projectRoot);
     console.log("Project approved for secret injection.");
     console.log("  rv-exec will now inject secrets for this project.");
   });
@@ -347,12 +359,13 @@ program
   .command("revoke")
   .description("Revoke approval for this project (user only)")
   .action(() => {
-    const cwd = process.cwd();
-    if (!isApproved(cwd)) {
+    const configPath = findConfig();
+    const projectRoot = configPath ? dirname(configPath) : process.cwd();
+    if (!isApproved(projectRoot)) {
       console.log("Project is not approved.");
       return;
     }
-    revokeProject(cwd);
+    revokeProject(projectRoot);
     console.log("Project approval revoked.");
     console.log("  rv-exec will no longer inject secrets for this project.");
   });
