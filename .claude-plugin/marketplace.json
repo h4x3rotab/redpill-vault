@@ -9,12 +9,12 @@
       "source": "./",
       "description": "Secure credential manager for AI tools — transparent secret injection from an encrypted vault",
       "strict": false,
-      "keywords": ["secrets", "vault", "credentials", "hook"],
+      "keywords": ["secrets", "vault", "credentials", "env"],
       "skills": ["./skills/redpill-vault"]
     }
   ],
   "metadata": {
     "description": "Marketplace for the redpill-vault plugin",
-    "version": "0.1.1"
+    "version": "0.5.0"
   }
 }
